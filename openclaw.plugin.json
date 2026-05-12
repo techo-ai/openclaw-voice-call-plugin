@@ -1,0 +1,811 @@
+{
+  "id": "voice-call",
+  "name": "Voice Call",
+  "description": "Voice-call plugin with Telnyx, Twilio, Plivo, Asterisk, and mock providers",
+  "contracts": {
+    "tools": ["voice_call"]
+  },
+  "uiHints": {
+    "provider": {
+      "label": "Provider",
+      "help": "Use twilio, telnyx, plivo, asterisk, or mock for dev/no-network."
+    },
+    "fromNumber": {
+      "label": "From Number",
+      "placeholder": "+15550001234"
+    },
+    "toNumber": {
+      "label": "Default To Number",
+      "placeholder": "+15550001234"
+    },
+    "inboundPolicy": {
+      "label": "Inbound Policy"
+    },
+    "allowFrom": {
+      "label": "Inbound Allowlist"
+    },
+    "inboundGreeting": {
+      "label": "Inbound Greeting",
+      "advanced": true
+    },
+    "telnyx.apiKey": {
+      "label": "Telnyx API Key",
+      "sensitive": true
+    },
+    "telnyx.connectionId": {
+      "label": "Telnyx Connection ID"
+    },
+    "telnyx.publicKey": {
+      "label": "Telnyx Public Key",
+      "sensitive": true
+    },
+    "twilio.accountSid": {
+      "label": "Twilio Account SID"
+    },
+    "twilio.authToken": {
+      "label": "Twilio Auth Token",
+      "sensitive": true
+    },
+    "asterisk.ariUrl": {
+      "label": "Asterisk ARI URL",
+      "placeholder": "http://localhost:8088"
+    },
+    "asterisk.ariUsername": {
+      "label": "Asterisk ARI Username"
+    },
+    "asterisk.ariPassword": {
+      "label": "Asterisk ARI Password",
+      "sensitive": true
+    },
+    "asterisk.stasisApp": {
+      "label": "Stasis App Name",
+      "placeholder": "openclaw"
+    },
+    "asterisk.context": {
+      "label": "SIP Context",
+      "placeholder": "from-internal",
+      "advanced": true
+    },
+    "asterisk.callerId": {
+      "label": "Default Caller ID",
+      "advanced": true
+    },
+    "asterisk.inboundProfiles.defaultGreeting": {
+      "label": "Asterisk Inbound Greeting",
+      "advanced": true
+    },
+    "asterisk.inboundProfiles.defaultSystemPrompt": {
+      "label": "Asterisk Inbound System Prompt",
+      "advanced": true
+    },
+    "outbound.defaultMode": {
+      "label": "Default Call Mode"
+    },
+    "outbound.notifyHangupDelaySec": {
+      "label": "Notify Hangup Delay (sec)",
+      "advanced": true
+    },
+    "serve.port": {
+      "label": "Webhook Port"
+    },
+    "serve.bind": {
+      "label": "Webhook Bind"
+    },
+    "serve.path": {
+      "label": "Webhook Path"
+    },
+    "tailscale.mode": {
+      "label": "Tailscale Mode",
+      "advanced": true
+    },
+    "tailscale.path": {
+      "label": "Tailscale Path",
+      "advanced": true
+    },
+    "tunnel.provider": {
+      "label": "Tunnel Provider",
+      "advanced": true
+    },
+    "tunnel.ngrokAuthToken": {
+      "label": "ngrok Auth Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tunnel.ngrokDomain": {
+      "label": "ngrok Domain",
+      "advanced": true
+    },
+    "tunnel.allowNgrokFreeTierLoopbackBypass": {
+      "label": "Allow ngrok Free Tier (Loopback Bypass)",
+      "advanced": true
+    },
+    "streaming.enabled": {
+      "label": "Enable Streaming",
+      "advanced": true
+    },
+    "streaming.openaiApiKey": {
+      "label": "OpenAI Realtime API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "streaming.sttModel": {
+      "label": "Realtime STT Model",
+      "advanced": true
+    },
+    "streaming.streamPath": {
+      "label": "Media Stream Path",
+      "advanced": true
+    },
+    "tts.provider": {
+      "label": "TTS Provider Override",
+      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
+      "advanced": true
+    },
+    "tts.openai.model": {
+      "label": "OpenAI TTS Model",
+      "advanced": true
+    },
+    "tts.openai.voice": {
+      "label": "OpenAI TTS Voice",
+      "advanced": true
+    },
+    "tts.openai.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tts.elevenlabs.modelId": {
+      "label": "ElevenLabs Model ID",
+      "advanced": true
+    },
+    "tts.elevenlabs.voiceId": {
+      "label": "ElevenLabs Voice ID",
+      "advanced": true
+    },
+    "tts.elevenlabs.apiKey": {
+      "label": "ElevenLabs API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tts.elevenlabs.baseUrl": {
+      "label": "ElevenLabs Base URL",
+      "advanced": true
+    },
+    "publicUrl": {
+      "label": "Public Webhook URL",
+      "advanced": true
+    },
+    "skipSignatureVerification": {
+      "label": "Skip Signature Verification",
+      "advanced": true
+    },
+    "store": {
+      "label": "Call Log Store Path",
+      "advanced": true
+    },
+    "responseModel": {
+      "label": "Response Model",
+      "advanced": true
+    },
+    "responseSystemPrompt": {
+      "label": "Response System Prompt",
+      "advanced": true
+    },
+    "responseTimeoutMs": {
+      "label": "Response Timeout (ms)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "provider": {
+        "type": "string",
+        "enum": [
+          "telnyx",
+          "twilio",
+          "plivo",
+          "asterisk",
+          "mock"
+        ]
+      },
+      "telnyx": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "connectionId": {
+            "type": "string"
+          },
+          "publicKey": {
+            "type": "string"
+          }
+        }
+      },
+      "twilio": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountSid": {
+            "type": "string"
+          },
+          "authToken": {
+            "type": "string"
+          }
+        }
+      },
+      "plivo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "authId": {
+            "type": "string"
+          },
+          "authToken": {
+            "type": "string"
+          }
+        }
+      },
+      "asterisk": {
+        "type": "object",
+        "properties": {
+          "ariUrl": {
+            "type": "string"
+          },
+          "ariUsername": {
+            "type": "string"
+          },
+          "ariPassword": {
+            "type": "string"
+          },
+          "stasisApp": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "callerId": {
+            "type": "string"
+          },
+          "sipTrunk": {
+            "type": "string"
+          },
+          "ttsSpoolDir": {
+            "type": "string"
+          },
+          "audioUploadUrl": {
+            "type": "string"
+          },
+          "audioUploadToken": {
+            "type": "string"
+          },
+          "realtimeSystemPrompt": {
+            "type": "string"
+          },
+          "realtimeVoice": {
+            "type": "string"
+          },
+          "inboundProfiles": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "defaultGreeting": {
+                "type": "string"
+              },
+              "defaultSystemPrompt": {
+                "type": "string"
+              },
+              "overrides": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "callerNumbers": {
+                      "type": "array",
+                      "items": {"type": "string"},
+                      "minItems": 1
+                    },
+                    "greeting": {
+                      "type": "string"
+                    },
+                    "systemPrompt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["callerNumbers"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "asterisks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "ariUrl": {"type": "string"},
+            "ariUsername": {"type": "string"},
+            "ariPassword": {"type": "string"},
+            "stasisApp": {"type": "string"},
+            "context": {"type": "string"},
+            "callerId": {"type": "string"},
+            "sipTrunk": {"type": "string"},
+            "ttsSpoolDir": {"type": "string"},
+            "audioUploadUrl": {"type": "string"},
+            "audioUploadToken": {"type": "string"},
+            "realtimeSystemPrompt": {"type": "string"},
+            "realtimeVoice": {"type": "string"},
+            "inboundProfiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "defaultGreeting": {"type": "string"},
+                "defaultSystemPrompt": {"type": "string"},
+                "overrides": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "callerNumbers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1
+                      },
+                      "greeting": {"type": "string"},
+                      "systemPrompt": {"type": "string"}
+                    },
+                    "required": ["callerNumbers"]
+                  }
+                }
+              }
+            },
+            "routePrefixes": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "default": {"type": "boolean"}
+          }
+        }
+      },
+      "fromNumber": {
+        "type": "string",
+        "pattern": "^\\+[1-9]\\d{1,14}$"
+      },
+      "toNumber": {
+        "type": "string",
+        "pattern": "^\\+[1-9]\\d{1,14}$"
+      },
+      "inboundPolicy": {
+        "type": "string",
+        "enum": [
+          "disabled",
+          "allowlist",
+          "pairing",
+          "open"
+        ]
+      },
+      "allowFrom": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        }
+      },
+      "inboundGreeting": {
+        "type": "string"
+      },
+      "outbound": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultMode": {
+            "type": "string",
+            "enum": [
+              "notify",
+              "conversation"
+            ]
+          },
+          "notifyHangupDelaySec": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "maxDurationSeconds": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "staleCallReaperSeconds": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "silenceTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "transcriptTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "ringTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "maxConcurrentCalls": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "serve": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "bind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "tailscale": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "serve",
+              "funnel"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "tunnel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "none",
+              "ngrok",
+              "tailscale-serve",
+              "tailscale-funnel"
+            ]
+          },
+          "ngrokAuthToken": {
+            "type": "string"
+          },
+          "ngrokDomain": {
+            "type": "string"
+          },
+          "allowNgrokFreeTierLoopbackBypass": {
+            "type": "boolean"
+          }
+        }
+      },
+      "webhookSecurity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowedHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trustForwardingHeaders": {
+            "type": "boolean"
+          },
+          "trustedProxyIPs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "streaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "sttProvider": {
+            "type": "string",
+            "enum": [
+              "openai-realtime"
+            ]
+          },
+          "openaiApiKey": {
+            "type": "string"
+          },
+          "sttModel": {
+            "type": "string"
+          },
+          "silenceDurationMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "vadThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "streamPath": {
+            "type": "string"
+          },
+          "preStartTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnections": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnectionsPerIp": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxConnections": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "publicUrl": {
+        "type": "string"
+      },
+      "skipSignatureVerification": {
+        "type": "boolean"
+      },
+      "stt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai"
+            ]
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "tts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "auto": {
+            "type": "string",
+            "enum": [
+              "off",
+              "always",
+              "inbound",
+              "tagged"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "final",
+              "all"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "summaryModel": {
+            "type": "string"
+          },
+          "modelOverrides": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "allowText": {
+                "type": "boolean"
+              },
+              "allowProvider": {
+                "type": "boolean"
+              },
+              "allowVoice": {
+                "type": "boolean"
+              },
+              "allowModelId": {
+                "type": "boolean"
+              },
+              "allowVoiceSettings": {
+                "type": "boolean"
+              },
+              "allowNormalization": {
+                "type": "boolean"
+              },
+              "allowSeed": {
+                "type": "boolean"
+              }
+            }
+          },
+          "elevenlabs": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "voiceId": {
+                "type": "string"
+              },
+              "modelId": {
+                "type": "string"
+              },
+              "seed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "applyTextNormalization": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "on",
+                  "off"
+                ]
+              },
+              "languageCode": {
+                "type": "string"
+              },
+              "voiceSettings": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stability": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "similarityBoost": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "style": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "useSpeakerBoost": {
+                    "type": "boolean"
+                  },
+                  "speed": {
+                    "type": "number",
+                    "minimum": 0.5,
+                    "maximum": 2
+                  }
+                }
+              }
+            }
+          },
+          "openai": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "voice": {
+                "type": "string"
+              },
+              "speed": {
+                "type": "number",
+                "minimum": 0.25,
+                "maximum": 4.0
+              },
+              "instructions": {
+                "type": "string"
+              }
+            }
+          },
+          "edge": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "voice": {
+                "type": "string"
+              },
+              "lang": {
+                "type": "string"
+              },
+              "outputFormat": {
+                "type": "string"
+              },
+              "pitch": {
+                "type": "string"
+              },
+              "rate": {
+                "type": "string"
+              },
+              "volume": {
+                "type": "string"
+              },
+              "saveSubtitles": {
+                "type": "boolean"
+              },
+              "proxy": {
+                "type": "string"
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 120000
+              }
+            }
+          },
+          "prefsPath": {
+            "type": "string"
+          },
+          "maxTextLength": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 120000
+          }
+        }
+      },
+      "store": {
+        "type": "string"
+      },
+      "responseModel": {
+        "type": "string"
+      },
+      "responseSystemPrompt": {
+        "type": "string"
+      },
+      "responseTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}
