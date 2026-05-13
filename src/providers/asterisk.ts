@@ -85,6 +85,22 @@ export function resolveAsteriskInboundProfile(
   };
 }
 
+export function rewriteAsteriskOutboundNumber(
+  rawNumber: string,
+  rewrites: AsteriskConfig["outboundNumberRewrites"] | undefined,
+): string {
+  const normalized = rawNumber.replace(/^\+/, "");
+  if (!rewrites?.length) return normalized;
+
+  for (const rewrite of rewrites) {
+    const re = new RegExp(rewrite.pattern, rewrite.flags);
+    if (re.test(normalized)) {
+      return normalized.replace(re, rewrite.replace);
+    }
+  }
+  return normalized;
+}
+
 type AriChannel = {
   id: string;
   name?: string;
@@ -590,7 +606,7 @@ export class AsteriskProvider implements VoiceCallProvider {
    * Initiate an outbound call via ARI.
    */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
-    const to = input.to.replace(/^\+/, "");
+    const to = rewriteAsteriskOutboundNumber(input.to, this.config.outboundNumberRewrites);
     const endpoint = this.sipTrunk
       ? `PJSIP/${to}@${this.sipTrunk}`
       : `PJSIP/${to}`;

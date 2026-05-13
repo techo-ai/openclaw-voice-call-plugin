@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizeAsteriskCallerNumber,
+  rewriteAsteriskOutboundNumber,
   resolveAsteriskInboundProfile,
 } from "./asterisk.js";
 
@@ -75,5 +76,18 @@ describe("Asterisk inbound profiles", () => {
       greeting: "Top-level inbound greeting",
       systemPrompt: "Global realtime prompt",
     });
+  });
+
+  it("rewrites outbound numbers before creating provider endpoints", () => {
+    expect(
+      rewriteAsteriskOutboundNumber("+77029990503", [
+        { pattern: "^7(\\d{10})$", replace: "8$1" },
+      ]),
+    ).toBe("87029990503");
+    expect(
+      rewriteAsteriskOutboundNumber("15550001234", [
+        { pattern: "^7(\\d{10})$", replace: "8$1" },
+      ]),
+    ).toBe("15550001234");
   });
 });

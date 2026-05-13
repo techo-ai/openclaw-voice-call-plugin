@@ -197,7 +197,37 @@ export class MultiAsteriskProvider implements VoiceCallProvider {
   }
 
   async connect(): Promise<void> {
-    await Promise.all(this.clusters.map(({ provider }) => provider.connect()));
+    const attempts = this.clusters.map(({ name, provider }) =>
+      provider
+        .connect()
+        .then(() => ({ ok: true as const, name }))
+        .catch((err: unknown) => {
+          console.warn(
+            `[multi-asterisk] cluster "${name}" ARI initial connect failed (will retry): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          return { ok: false as const, name, err };
+        }),
+    );
+
+    try {
+      await Promise.any(
+        attempts.map((attempt) =>
+          attempt.then((result) =>
+            result.ok ? undefined : Promise.reject(result.err),
+          ),
+        ),
+      );
+    } catch (err) {
+      throw new Error(
+        `MultiAsteriskProvider: all cluster ARI initial connections failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    void Promise.all(attempts);
   }
 
   async disconnect(): Promise<void> {

@@ -276,6 +276,19 @@
           "sipTrunk": {
             "type": "string"
           },
+          "outboundNumberRewrites": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "pattern": {"type": "string"},
+                "replace": {"type": "string"},
+                "flags": {"type": "string"}
+              },
+              "required": ["pattern", "replace"]
+            }
+          },
           "ttsSpoolDir": {
             "type": "string"
           },
@@ -339,6 +352,19 @@
             "context": {"type": "string"},
             "callerId": {"type": "string"},
             "sipTrunk": {"type": "string"},
+            "outboundNumberRewrites": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {"type": "string"},
+                  "replace": {"type": "string"},
+                  "flags": {"type": "string"}
+                },
+                "required": ["pattern", "replace"]
+              }
+            },
             "ttsSpoolDir": {"type": "string"},
             "audioUploadUrl": {"type": "string"},
             "audioUploadToken": {"type": "string"},

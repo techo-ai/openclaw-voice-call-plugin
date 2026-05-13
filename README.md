@@ -67,6 +67,9 @@ Put under `plugins.entries.voice-call.config`:
     stasisApp: "openclaw",
     sipTrunk: "carrier-trunk",
     callerId: "15550001234",
+    outboundNumberRewrites: [
+      { pattern: "^7(\\d{10})$", replace: "8$1" },
+    ],
     realtimeVoice: "marin",
     inboundProfiles: {
       defaultGreeting: "Hello, this is the voice assistant. How can I help?",

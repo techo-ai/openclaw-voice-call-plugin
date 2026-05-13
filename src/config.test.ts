@@ -181,6 +181,7 @@ describe("validateProviderConfig", () => {
           ariPassword: "secret",
           routePrefixes: ["1"],
           default: true,
+          outboundNumberRewrites: [{ pattern: "^7(\\d{10})$", replace: "8$1" }],
           inboundProfiles: {
             defaultGreeting: "Hello from default",
             defaultSystemPrompt: "Default prompt",

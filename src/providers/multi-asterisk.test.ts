@@ -23,6 +23,8 @@ function createProvider(providerCallId: string, status = "in-progress") {
   } as unknown as AsteriskProvider & {
     initiateCall: ReturnType<typeof vi.fn>;
     getCallStatus: ReturnType<typeof vi.fn>;
+    connect: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -79,5 +81,44 @@ describe("MultiAsteriskProvider", () => {
 
     expect(result.providerCallId).toBe("kz-call");
     expect(kz.initiateCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not block startup on a slow secondary cluster once another connects", async () => {
+    const primary = createProvider("primary-call");
+    const secondary = createProvider("secondary-call");
+    let resolveSecondary!: () => void;
+    secondary.connect.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSecondary = resolve;
+        }),
+    );
+    const provider = new MultiAsteriskProvider([
+      { name: "primary", routePrefixes: ["1"], isDefault: true, provider: primary },
+      { name: "secondary", routePrefixes: ["44"], provider: secondary },
+    ]);
+
+    await expect(provider.connect()).resolves.toBeUndefined();
+
+    expect(primary.connect).toHaveBeenCalledOnce();
+    expect(secondary.connect).toHaveBeenCalledOnce();
+    resolveSecondary();
+  });
+
+  it("fails startup when every cluster initial connection fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const primary = createProvider("primary-call");
+    const secondary = createProvider("secondary-call");
+    primary.connect.mockRejectedValue(new Error("primary down"));
+    secondary.connect.mockRejectedValue(new Error("secondary down"));
+    const provider = new MultiAsteriskProvider([
+      { name: "primary", routePrefixes: ["1"], isDefault: true, provider: primary },
+      { name: "secondary", routePrefixes: ["44"], provider: secondary },
+    ]);
+
+    await expect(provider.connect()).rejects.toThrow(
+      /all cluster ARI initial connections failed/,
+    );
+    warn.mockRestore();
   });
 });

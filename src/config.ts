@@ -92,6 +92,20 @@ export type AsteriskInboundProfilesConfig = z.infer<
   typeof AsteriskInboundProfilesConfigSchema
 >;
 
+export const AsteriskOutboundNumberRewriteSchema = z
+  .object({
+    /** JavaScript RegExp pattern applied after stripping a leading "+". */
+    pattern: z.string().min(1),
+    /** Replacement string passed to String.replace. */
+    replace: z.string(),
+    /** Optional JavaScript RegExp flags, e.g. "i". */
+    flags: z.string().optional(),
+  })
+  .strict();
+export type AsteriskOutboundNumberRewrite = z.infer<
+  typeof AsteriskOutboundNumberRewriteSchema
+>;
+
 export const AsteriskConfigSchema = z
   .object({
     /** ARI base URL (e.g. http://localhost:8088) */
@@ -108,6 +122,8 @@ export const AsteriskConfigSchema = z
     callerId: z.string().optional(),
     /** PJSIP trunk name for outbound calls (e.g. "0102345") */
     sipTrunk: z.string().optional(),
+    /** Generic outbound number rewrites before creating the PJSIP endpoint. */
+    outboundNumberRewrites: z.array(AsteriskOutboundNumberRewriteSchema).optional(),
     /** TTS spool directory on the Asterisk server */
     ttsSpoolDir: z.string().optional(),
     /** HTTP URL for uploading TTS audio files to Asterisk sounds dir (e.g. http://host:8099) */
