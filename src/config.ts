@@ -179,7 +179,7 @@ export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 export const VoiceCallServeConfigSchema = z
   .object({
     /** Port to listen on */
-    port: z.number().int().positive().default(3334),
+    port: z.number().int().nonnegative().default(3334),
     /** Bind address */
     bind: z.string().default("127.0.0.1"),
     /** Webhook path */
