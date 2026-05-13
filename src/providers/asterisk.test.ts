@@ -80,10 +80,10 @@ describe("Asterisk inbound profiles", () => {
 
   it("rewrites outbound numbers before creating provider endpoints", () => {
     expect(
-      rewriteAsteriskOutboundNumber("+77029990503", [
+      rewriteAsteriskOutboundNumber("+77123456789", [
         { pattern: "^7(\\d{10})$", replace: "8$1" },
       ]),
-    ).toBe("87029990503");
+    ).toBe("87123456789");
     expect(
       rewriteAsteriskOutboundNumber("15550001234", [
         { pattern: "^7(\\d{10})$", replace: "8$1" },
