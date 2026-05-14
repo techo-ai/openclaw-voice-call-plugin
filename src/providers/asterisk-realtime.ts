@@ -131,6 +131,14 @@ export function createRealtimeVoiceSession(
   let calleeHeardUtterance = false;
   /** Assistant `response.audio_transcript.done` events with non-empty text (per session). */
   let assistantAudioTranscriptDoneCount = 0;
+  /** Last assistant transcript text — gates premature end_call hangup. */
+  let lastAssistantTranscript = "";
+  /** Debug timings for hang diagnosis. */
+  let lastSpeakTextAt = 0;
+  let lastUserTranscriptAt = 0;
+  let currentResponseCreatedAt = 0;
+  let firstAudioDeltaLoggedForCurrentResponse = false;
+  let bufferedAudioLogged = false;
 
   function isFarewell(text: string): boolean {
     const s = text.toLowerCase();
@@ -180,6 +188,24 @@ export function createRealtimeVoiceSession(
       case "response.created": {
         const rid = event.response?.id ?? "";
         responseActive = true;
+        currentResponseCreatedAt = Date.now();
+        firstAudioDeltaLoggedForCurrentResponse = false;
+        // #region agent log
+        agentDebugLog({
+          runId: "hang-debug-2026-05-15",
+          hypothesisId: "H1-response-created-late",
+          location: "asterisk-realtime.ts:response.created",
+          message: "Realtime response created",
+          data: {
+            rid,
+            pendingOurResponse,
+            msSinceSpeakText: lastSpeakTextAt ? currentResponseCreatedAt - lastSpeakTextAt : null,
+            msSinceUserTranscript: lastUserTranscriptAt
+              ? currentResponseCreatedAt - lastUserTranscriptAt
+              : null,
+          },
+        });
+        // #endregion
         if (pendingOurResponse) {
           ourResponseId = rid;
           pendingOurResponse = false;
@@ -227,6 +253,23 @@ export function createRealtimeVoiceSession(
       // older stacks used response.audio.* — handle both so RTP is not silent.
       case "response.audio.delta":
       case "response.output_audio.delta": {
+        if (!firstAudioDeltaLoggedForCurrentResponse) {
+          firstAudioDeltaLoggedForCurrentResponse = true;
+          // #region agent log
+          agentDebugLog({
+            runId: "hang-debug-2026-05-15",
+            hypothesisId: "H2-audio-delta-delayed",
+            location: "asterisk-realtime.ts:response.audio.delta",
+            message: "First assistant audio delta for response",
+            data: {
+              senderReady: Boolean(sender),
+              msSinceResponseCreated: currentResponseCreatedAt
+                ? Date.now() - currentResponseCreatedAt
+                : null,
+            },
+          });
+          // #endregion
+        }
         // Forward audio for every response. Session is configured per-call with
         // task-specific instructions so VAD auto-responses are the correct reply.
         if (event.delta && sender) {
@@ -246,6 +289,7 @@ export function createRealtimeVoiceSession(
       case "response.output_audio_transcript.done":
         if (event.transcript) {
           assistantAudioTranscriptDoneCount += 1;
+          lastAssistantTranscript = event.transcript;
           // #region agent log
           if (assistantAudioTranscriptDoneCount <= 2) {
             const lower = event.transcript.toLowerCase();
@@ -289,6 +333,20 @@ export function createRealtimeVoiceSession(
         break;
 
       case "conversation.item.input_audio_transcription.completed":
+        lastUserTranscriptAt = Date.now();
+        // #region agent log
+        agentDebugLog({
+          runId: "hang-debug-2026-05-15",
+          hypothesisId: "H3-user-turn-no-followup",
+          location: "asterisk-realtime.ts:user-transcription.completed",
+          message: "User transcription completed",
+          data: {
+            hasTranscript: Boolean((event.transcript ?? "").trim()),
+            transcriptPreview: (event.transcript ?? "").slice(0, 120),
+            responseActive,
+          },
+        });
+        // #endregion
         // #region agent log
         console.log(
           `[agent-debug][H18] user transcription completed: ` +
@@ -310,6 +368,76 @@ export function createRealtimeVoiceSession(
         // Built-in tool dispatch. Currently the only tool registered is end_call,
         // which the model invokes after saying goodbye to hang up cleanly.
         if (event.name === "end_call") {
+          // Premature-hangup guard: the model sometimes calls end_call after the
+          // FIRST callee reply even when the task isn't resolved (e.g. the user
+          // proposed an alternative and the bot just hangs up).
+          // Require: assistant spoke at least 2 turns (greeting + ≥1 follow-up)
+          // AND the LAST assistant turn was an actual farewell phrase.
+          const lastWasFarewell = isFarewell(lastAssistantTranscript);
+          const okToEnd = assistantAudioTranscriptDoneCount >= 2 && lastWasFarewell;
+          // #region agent log
+          agentDebugLog({
+            runId: "voice-ux-2026-05-15",
+            hypothesisId: "H-end-call-premature",
+            location: "asterisk-realtime.ts:response.function_call_arguments.done",
+            message: "end_call invoked",
+            data: {
+              okToEnd,
+              assistantTurns: assistantAudioTranscriptDoneCount,
+              calleeHeardUtterance,
+              lastAssistantPreview: lastAssistantTranscript.slice(0, 160),
+              modelReason: (event.arguments ?? "").slice(0, 200),
+            },
+          });
+          // #endregion
+          if (!okToEnd) {
+            console.warn(
+              `[asterisk-realtime] end_call REJECTED (premature): assistantTurns=${assistantAudioTranscriptDoneCount} lastWasFarewell=${lastWasFarewell} calleeHeard=${calleeHeardUtterance}`,
+            );
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              const callId = event.call_id ?? "";
+              ws.send(
+                JSON.stringify({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "function_call_output",
+                    call_id: callId,
+                    output: JSON.stringify({
+                      ok: false,
+                      error:
+                        "Too early to end the call. The callee has not yet given a final answer. First respond to their last reply, ask one short clarifying question or accept the closest available option, and only call end_call AFTER you actually said goodbye out loud.",
+                    }),
+                  },
+                }),
+              );
+              if (wireFormat === "ga") {
+                ws.send(
+                  JSON.stringify({
+                    type: "response.create",
+                    response: {
+                      output_modalities: ["audio"],
+                      audio: { output: { format: { type: "audio/pcmu" } } },
+                      instructions:
+                        "Continue the call. Respond to the callee's last reply in their language: either accept the closest available option, ask one short clarifying question, or briefly say you'll need to check. Do NOT say goodbye yet.",
+                    },
+                  }),
+                );
+              } else {
+                ws.send(
+                  JSON.stringify({
+                    type: "response.create",
+                    response: {
+                      modalities: ["audio", "text"],
+                      output_audio_format: "g711_ulaw",
+                      instructions:
+                        "Continue the call. Respond to the callee's last reply in their language: either accept the closest available option, ask one short clarifying question, or briefly say you'll need to check. Do NOT say goodbye yet.",
+                    },
+                  }),
+                );
+              }
+            }
+            break;
+          }
           console.log("[asterisk-realtime] end_call tool invoked — hanging up");
           if (farewellHangupTimer) {
             clearTimeout(farewellHangupTimer);
@@ -371,6 +499,19 @@ export function createRealtimeVoiceSession(
 
       // Mark that the NEXT response.created is ours
       pendingOurResponse = true;
+      lastSpeakTextAt = Date.now();
+      // #region agent log
+      agentDebugLog({
+        runId: "hang-debug-2026-05-15",
+        hypothesisId: "H1-response-created-late",
+        location: "asterisk-realtime.ts:speakText",
+        message: "speakText requested",
+        data: {
+          textLength: text.length,
+          responseActive,
+        },
+      });
+      // #endregion
 
       // Use per-response instructions to make the model speak the exact text.
       // Sending as role:"user" + response.create causes the model to RESPOND to
@@ -754,6 +895,21 @@ export function createRealtimeVoiceSession(
             const audio = Buffer.from(event.delta, "base64");
             if (audio.length > 0) {
               pendingAudio.push(audio);
+              if (!bufferedAudioLogged) {
+                bufferedAudioLogged = true;
+                // #region agent log
+                agentDebugLog({
+                  runId: "hang-debug-2026-05-15",
+                  hypothesisId: "H2-audio-buffering",
+                  location: "asterisk-realtime.ts:buffer-audio-before-sender",
+                  message: "Audio buffered before RTP sender is ready",
+                  data: {
+                    pendingAudioChunks: pendingAudio.length,
+                    firstChunkBytes: audio.length,
+                  },
+                });
+                // #endregion
+              }
             }
             return;
           }
