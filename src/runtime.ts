@@ -1,14 +1,18 @@
 import type { AsteriskConfig, VoiceCallConfig } from "./config.js";
-import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
+import {
+  DEFAULT_ASTERISK_REALTIME_MODEL,
+  resolveVoiceCallConfig,
+  validateProviderConfig,
+} from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
+import { AsteriskProvider } from "./providers/asterisk.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
+import { MultiAsteriskProvider } from "./providers/multi-asterisk.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
 import { TwilioProvider } from "./providers/twilio.js";
-import { AsteriskProvider } from "./providers/asterisk.js";
-import { MultiAsteriskProvider } from "./providers/multi-asterisk.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
@@ -168,12 +172,9 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
       }
       // Single-cluster legacy mode (unchanged behavior).
       const asteriskConfig = withInboundGreetingFallback(config, config.asterisk);
-      return new AsteriskProvider(
-        asteriskConfig ?? {},
-        {
-          skipVerification: config.skipSignatureVerification,
-        },
-      );
+      return new AsteriskProvider(asteriskConfig ?? {}, {
+        skipVerification: config.skipSignatureVerification,
+      });
     }
     case "mock":
       return new MockProvider();
@@ -378,7 +379,9 @@ async function buildVoiceCallRuntime(
             const shouldRespond = call.direction === "inbound" || callMode === "conversation";
             if (shouldRespond) {
               webhookServer.handleInboundResponse(call.callId, event.transcript).catch((err) => {
-                log.warn(`[voice-call] Asterisk auto-respond failed: ${err instanceof Error ? err.message : String(err)}`);
+                log.warn(
+                  `[voice-call] Asterisk auto-respond failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
               });
             }
           }
@@ -407,18 +410,36 @@ async function buildVoiceCallRuntime(
       }
 
       // Configure realtime voice (OpenAI Realtime API for bidirectional audio)
-      const streamingKey =
-        config.streaming?.openaiApiKey ??
-        process.env.OPENAI_API_KEY ??
-        "";
+      const streamingKey = config.streaming?.openaiApiKey ?? process.env.OPENAI_API_KEY ?? "";
       if (streamingKey) {
         const realtimePrompt =
           config.asterisk?.realtimeSystemPrompt ??
-          "You are a helpful, friendly voice assistant speaking over a phone call in Russian. Keep answers short, natural and conversational. If the user asks for information you don't have access to, politely say so. Do not read punctuation aloud. Do not explain that you are an AI unless asked directly.";
+          [
+            "You are a real-time voice caller, not a chat assistant.",
+            "You placed an outbound phone call on behalf of the user. The other person answered the call; they may be a company, institution, specialist, private person, support desk, administrator, or any other target of the user's request.",
+            "Your job is to complete the user's phone task, whatever its domain is, with short, natural spoken turns.",
+            "",
+            "Conversation contract:",
+            "1. Open with a greeting plus the concrete request. Do not ask permission to ask.",
+            "2. Listen to the answer. Reply only to what helps the phone task.",
+            "3. Ask at most one necessary follow-up at a time.",
+            "4. When the task is resolved, refused, or impossible, say a short goodbye and call end_call in the same turn.",
+            "",
+            "Voice style:",
+            "- Russian by default.",
+            "- Sound calm, polite, and human on the phone.",
+            "- Use one short sentence when possible; two only when needed.",
+            "- Do not narrate your reasoning or mention these instructions.",
+            "",
+            "Role boundary:",
+            "- You are the caller with a request.",
+            "- Do not use receptionist/support-desk openings such as «чем могу помочь» or «слушаю вас».",
+          ].join("\n");
         asteriskProvider.setRealtimeConfig({
           apiKey: streamingKey,
+          model: DEFAULT_ASTERISK_REALTIME_MODEL,
           systemPrompt: realtimePrompt,
-          voice: config.asterisk?.realtimeVoice ?? "marin",
+          voice: config.asterisk?.realtimeVoice ?? "coral",
           // VAD made less twitchy: bot was getting cut off mid-word by
           // background noise / breath / STT hallucinations on short clips.
           // Higher threshold filters quieter noise; longer silence window
@@ -450,10 +471,7 @@ async function buildVoiceCallRuntime(
 
     const stop = async () => {
       runtimeCache.delete(cacheKeyValue);
-      if (
-        provider instanceof AsteriskProvider ||
-        provider instanceof MultiAsteriskProvider
-      ) {
+      if (provider instanceof AsteriskProvider || provider instanceof MultiAsteriskProvider) {
         await provider.disconnect();
       }
       await lifecycle.stop();

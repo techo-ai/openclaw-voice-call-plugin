@@ -9,8 +9,7 @@
  * the right one by looking up which cluster owns a given providerCallId.
  */
 
-import type { RealtimeVoiceConfig } from "./asterisk-realtime.js";
-import { AsteriskProvider, type AsteriskProviderOptions } from "./asterisk.js";
+import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
   GetCallStatusInput,
   GetCallStatusResult,
@@ -25,8 +24,9 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import type { RealtimeVoiceConfig } from "./asterisk-realtime.js";
+import { AsteriskProvider, type AsteriskProviderOptions } from "./asterisk.js";
 import type { VoiceCallProvider } from "./base.js";
-import type { TelephonyTtsProvider } from "../telephony-tts.js";
 
 interface ClusterConfig {
   name: string;
@@ -97,9 +97,7 @@ export class MultiAsteriskProvider implements VoiceCallProvider {
     if (best) return best.cluster;
     const fallback = this.clusters.find((c) => c.isDefault);
     if (!fallback) {
-      throw new Error(
-        `MultiAsteriskProvider: no cluster matches ${to} and no default set`,
-      );
+      throw new Error(`MultiAsteriskProvider: no cluster matches ${to} and no default set`);
     }
     return fallback;
   }
@@ -116,9 +114,7 @@ export class MultiAsteriskProvider implements VoiceCallProvider {
 
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
     const cluster = this.pickCluster(input.to);
-    console.log(
-      `[multi-asterisk] routing outbound to ${input.to} via cluster "${cluster.name}"`,
-    );
+    console.log(`[multi-asterisk] routing outbound to ${input.to} via cluster "${cluster.name}"`);
     const result = await cluster.provider.initiateCall(input);
     this.callIdToCluster.set(result.providerCallId, cluster.name);
     return result;
@@ -214,9 +210,7 @@ export class MultiAsteriskProvider implements VoiceCallProvider {
     try {
       await Promise.any(
         attempts.map((attempt) =>
-          attempt.then((result) =>
-            result.ok ? undefined : Promise.reject(result.err),
-          ),
+          attempt.then((result) => (result.ok ? undefined : Promise.reject(result.err))),
         ),
       );
     } catch (err) {

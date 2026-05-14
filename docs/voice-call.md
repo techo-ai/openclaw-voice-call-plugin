@@ -91,20 +91,16 @@ Set config under `plugins.entries.voice-call.config`:
             stasisApp: "openclaw",
             sipTrunk: "carrier-trunk",
             callerId: "15550001234",
-            outboundNumberRewrites: [
-              { pattern: "^7(\\d{10})$", replace: "8$1" },
-            ],
+            outboundNumberRewrites: [{ pattern: "^7(\\d{10})$", replace: "8$1" }],
             realtimeVoice: "marin",
             inboundProfiles: {
               defaultGreeting: "Hello, this is the voice assistant. How can I help?",
-              defaultSystemPrompt:
-                "You answer inbound calls briefly and collect the caller's message.",
+              defaultSystemPrompt: "You answer inbound calls briefly and collect the caller's message.",
               overrides: [
                 {
                   callerNumbers: ["+15550005678"],
                   greeting: "Hi, how can I help?",
-                  systemPrompt:
-                    "You are speaking directly with the account owner. Keep it brief.",
+                  systemPrompt: "You are speaking directly with the account owner. Keep it brief.",
                 },
               ],
             },
@@ -129,6 +125,7 @@ Set config under `plugins.entries.voice-call.config`:
 
           outbound: {
             defaultMode: "notify", // notify | conversation
+            sameNumberCooldownSeconds: 0, // set >0 to suppress immediate repeat dials
           },
 
           streaming: {
@@ -183,11 +180,8 @@ For a single Asterisk:
     stasisApp: "openclaw",
     sipTrunk: "carrier-trunk",
     callerId: "15550001234",
-    outboundNumberRewrites: [
-      { pattern: "^7(\\d{10})$", replace: "8$1" },
-    ],
-    realtimeSystemPrompt:
-      "You are a helpful, friendly voice assistant speaking over a phone call.",
+    outboundNumberRewrites: [{ pattern: "^7(\\d{10})$", replace: "8$1" }],
+    realtimeSystemPrompt: "You are a helpful, friendly voice assistant speaking over a phone call.",
     realtimeVoice: "marin",
   },
   streaming: {
@@ -243,14 +237,12 @@ system prompts:
   asterisk: {
     inboundProfiles: {
       defaultGreeting: "Hello, this is the voice assistant. How can I help?",
-      defaultSystemPrompt:
-        "You answer inbound calls briefly and collect the caller's message.",
+      defaultSystemPrompt: "You answer inbound calls briefly and collect the caller's message.",
       overrides: [
         {
           callerNumbers: ["+15550005678"],
           greeting: "Hi, how can I help?",
-          systemPrompt:
-            "You are speaking directly with the account owner. Keep it brief.",
+          systemPrompt: "You are speaking directly with the account owner. Keep it brief.",
         },
       ],
     },
@@ -461,6 +453,10 @@ For outbound `conversation` calls, first-message handling is tied to live playba
 - Barge-in queue clear and auto-response are suppressed only while the initial greeting is actively speaking.
 - If initial playback fails, the call returns to `listening` and the initial message remains queued for retry.
 - Initial playback for Twilio streaming starts on stream connect without extra delay.
+
+### Repeat-call cooldown
+
+Set `outbound.sameNumberCooldownSeconds` to prevent accidental immediate repeat calls to the same normalized destination. The default is `0` (disabled). This is useful when an upstream agent might retry a phone task after a short failed call.
 
 ### Twilio stream disconnect grace
 

@@ -6,9 +6,45 @@
  * Supports barge-in (user speech interrupts assistant playback).
  */
 
+import crypto from "node:crypto";
 import WebSocket from "ws";
+import { DEFAULT_ASTERISK_REALTIME_MODEL } from "../config.js";
 import type { RtpReceiver, RtpSender, RtpSource } from "./asterisk-rtp.js";
 import { createRtpSender, createSilenceBuffer } from "./asterisk-rtp.js";
+
+const REALTIME_PROMPT_VERSION = "caller-general-task-state-machine-2026-05-15";
+const DEBUG_ENDPOINT = "http://127.0.0.1:7840/ingest/25173012-99ac-4a06-ad7b-e7904e61d643";
+const DEBUG_SESSION_ID = "c8a2b2";
+
+function promptHash(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function agentDebugLog(payload: {
+  runId: string;
+  hypothesisId: string;
+  location: string;
+  message: string;
+  data: Record<string, unknown>;
+}): void {
+  fetch(DEBUG_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": DEBUG_SESSION_ID,
+    },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      timestamp: Date.now(),
+      ...payload,
+    }),
+  }).catch(() => {});
+}
+
+/** GA Realtime rejects the legacy beta `session.update` + `OpenAI-Beta: realtime=v1` combo. */
+function isGaRealtimeModelId(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("gpt-realtime-2");
+}
 
 export interface RealtimeVoiceConfig {
   apiKey: string;
@@ -27,6 +63,12 @@ export interface RealtimeVoiceConfig {
    * barges in on top of our TTS, producing garbled overlapping audio.
    */
   autoRespond?: boolean;
+  /** If set, passed to Realtime input_audio_transcription.language (e.g. "ru"). Omit for auto / multilingual. */
+  inputAudioTranscriptionLanguage?: string;
+  /** Optional STT model id (default gpt-4o-transcribe). */
+  inputAudioTranscriptionModel?: string;
+  /** Optional vocabulary hint for the transcription model (venue names, jargon). */
+  inputAudioTranscriptionPrompt?: string;
 }
 
 export interface RealtimeVoiceSession {
@@ -67,6 +109,8 @@ export function createRealtimeVoiceSession(
   let onHangupRequested: (() => void) | null = null;
 
   const silencePaddingMs = config.silencePaddingMs ?? 100;
+  /** Set in `start()` before the socket opens; used by `speakText` / `triggerGreeting`. */
+  let wireFormat: "beta" | "ga" = "beta";
 
   // Track which response ID was triggered by our speakText() call.
   // VAD auto-responses get different IDs — we only forward audio for ours.
@@ -83,13 +127,18 @@ export function createRealtimeVoiceSession(
   // Watchdog: if the assistant says goodbye but the model forgets to invoke
   // end_call in the same turn, we hang up 2.5s after the farewell transcript.
   let farewellHangupTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Callee produced at least one non-empty final STT line. */
+  let calleeHeardUtterance = false;
+  /** Assistant `response.audio_transcript.done` events with non-empty text (per session). */
+  let assistantAudioTranscriptDoneCount = 0;
 
   function isFarewell(text: string): boolean {
     const s = text.toLowerCase();
+    // Do not match bare "хорошего дня" — it appears in polite greetings
+    // ("желаю хорошего дня") and used to trigger the farewell watchdog wrongly.
     return (
       s.includes("до свидания") ||
       s.includes("всего доброго") ||
-      s.includes("хорошего дня") ||
       s.includes("goodbye") ||
       s.includes("bye bye")
     );
@@ -153,6 +202,17 @@ export function createRealtimeVoiceSession(
         // Skip cancellation during the greeting grace window — the line often
         // has ring-down tones or a reply like "Алло" that would otherwise
         // interrupt our opening sentence mid-word.
+        // #region agent log
+        console.log(
+          `[agent-debug][H17] speech_started: ` +
+            JSON.stringify({
+              now: Date.now(),
+              suppressBargeUntil,
+              suppressed: Date.now() < suppressBargeUntil,
+              responseActive,
+            }),
+        );
+        // #endregion
         if (Date.now() < suppressBargeUntil) {
           break;
         }
@@ -163,31 +223,84 @@ export function createRealtimeVoiceSession(
         }
         break;
 
-      case "response.audio.delta": {
+      // Newer Realtime models (e.g. gpt-realtime-2) emit response.output_audio.*;
+      // older stacks used response.audio.* — handle both so RTP is not silent.
+      case "response.audio.delta":
+      case "response.output_audio.delta": {
         // Forward audio for every response. Session is configured per-call with
         // task-specific instructions so VAD auto-responses are the correct reply.
         if (event.delta && sender) {
           const audio = Buffer.from(event.delta, "base64");
           if (audio.length > 0) {
             sender.send(audio);
+            // While assistant audio streams, brief line noise / callee breath can
+            // trigger input_audio_buffer.speech_started → response.cancel and cut
+            // the bot mid-sentence. Extend barge-in suppression on each chunk.
+            suppressBargeUntil = Math.max(suppressBargeUntil, Date.now() + 900);
           }
         }
         break;
       }
 
       case "response.audio_transcript.done":
+      case "response.output_audio_transcript.done":
+        if (event.transcript) {
+          assistantAudioTranscriptDoneCount += 1;
+          // #region agent log
+          if (assistantAudioTranscriptDoneCount <= 2) {
+            const lower = event.transcript.toLowerCase();
+            console.log(
+              `[agent-debug][H4] early assistant transcript: ` +
+                JSON.stringify({
+                  runId: "prompt-state-machine-v2",
+                  idx: assistantAudioTranscriptDoneCount,
+                  hasReceptionistPhrase:
+                    lower.includes("чем могу помочь") ||
+                    lower.includes("чем могу быть полез") ||
+                    lower.includes("слушаю вас"),
+                  hasPermissionOpening:
+                    lower.includes("можно спросить") ||
+                    lower.includes("можно коротко") ||
+                    lower.includes("можно уточнить"),
+                  text: event.transcript.slice(0, 160),
+                }),
+            );
+          }
+          // #endregion
+        }
         if (event.transcript && onAssistantTranscript) {
           onAssistantTranscript(event.transcript);
         }
         // Safety net: if the assistant said a farewell but the model forgot to
         // invoke end_call in the same turn, hang up after a short delay so the
         // caller doesn't sit on dead air waiting for acknowledgement.
-        if (event.transcript && isFarewell(event.transcript)) {
+        //
+        // Gate: do not arm on the very first assistant line alone — some models
+        // briefly mis-speak or STT echoes can contain "goodbye"-like substrings
+        // before any callee speech; real goodbyes happen after the callee spoke
+        // or on the 2nd+ assistant turn.
+        if (
+          event.transcript &&
+          isFarewell(event.transcript) &&
+          (calleeHeardUtterance || assistantAudioTranscriptDoneCount >= 2)
+        ) {
           scheduleFarewellHangup();
         }
         break;
 
       case "conversation.item.input_audio_transcription.completed":
+        // #region agent log
+        console.log(
+          `[agent-debug][H18] user transcription completed: ` +
+            JSON.stringify({
+              hasTranscript: Boolean((event.transcript ?? "").trim()),
+              transcriptPreview: (event.transcript ?? "").slice(0, 120),
+            }),
+        );
+        // #endregion
+        if ((event.transcript ?? "").trim()) {
+          calleeHeardUtterance = true;
+        }
         if (event.transcript && onUserTranscript) {
           onUserTranscript(event.transcript);
         }
@@ -209,12 +322,14 @@ export function createRealtimeVoiceSession(
         break;
 
       case "response.audio.done":
+      case "response.output_audio.done":
       case "response.done": {
-        const doneRid = event.response_id ?? (event.response as { id?: string } | undefined)?.id ?? "";
+        const doneRid =
+          event.response_id ?? (event.response as { id?: string } | undefined)?.id ?? "";
         if (doneRid === ourResponseId) {
           ourResponseId = null;
         }
-        if (event.type === "response.done") {
+        if (event.type === "response.done" || event.type === "response.output_audio.done") {
           responseActive = false;
         }
         break;
@@ -261,14 +376,34 @@ export function createRealtimeVoiceSession(
       // Sending as role:"user" + response.create causes the model to RESPOND to
       // the text instead of reading it verbatim. Per-response instructions override
       // session instructions and directly tell the model what to say.
-      ws.send(JSON.stringify({
-        type: "response.create",
-        response: {
-          modalities: ["audio", "text"],
-          instructions: `Say the following text exactly, word for word, without any changes, additions, or interpretation. Do not respond to it, just read it aloud:\n\n${text}`,
-          output_audio_format: "g711_ulaw",
-        },
-      }));
+      const readAloudInstructions = `Say the following text exactly, word for word, without any changes, additions, or interpretation. Do not respond to it, just read it aloud:\n\n${text}`;
+      if (wireFormat === "ga") {
+        ws.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              output_modalities: ["audio"],
+              audio: {
+                output: {
+                  format: { type: "audio/pcmu" },
+                },
+              },
+              instructions: readAloudInstructions,
+            },
+          }),
+        );
+      } else {
+        ws.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              modalities: ["audio", "text"],
+              instructions: readAloudInstructions,
+              output_audio_format: "g711_ulaw",
+            },
+          }),
+        );
+      }
       console.log(`[asterisk-realtime] speakText: "${text.slice(0, 80)}"`);
     },
 
@@ -295,55 +430,119 @@ export function createRealtimeVoiceSession(
         console.warn("[asterisk-realtime] Cannot trigger greeting: WS not open");
         return;
       }
-      // Grace window: ignore VAD-triggered barge-in for 4s so ring-down tones
+      // Grace window: ignore VAD-triggered barge-in for ~5.5s so ring-down tones
       // or a brief initial hello don't cancel our opening sentence midway.
-      suppressBargeUntil = Date.now() + 4000;
-      // Inject an explicit "phone just connected, speak NOW" cue. Without this,
-      // the model occasionally emits stage-direction text like "(waiting)"
-      // instead of an actual greeting, since a bare response.create with no
-      // user turn leaves the situation ambiguous.
-      ws.send(JSON.stringify({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "system",
-          content: [{
-            type: "input_text",
-            text:
-              "The phone just connected. Say the first spoken line now: a short greeting plus the task request. " +
-              "Use the same language as the task instructions. One phrase, up to 12 words. " +
-              "No pauses, no waiting, no parenthetical stage directions.",
-          }],
+      suppressBargeUntil = Date.now() + 5500;
+      // Opening language: English-only trigger cues ("same language as task")
+      // made the model sometimes pick Spanish. When instructions contain Cyrillic,
+      // pin the first line to Russian; otherwise follow the task language.
+      const taskLooksRussian = /task_language_hint:\s*ru/.test(config.systemPrompt);
+      // #region agent log
+      console.log(
+        `[agent-debug][H2] triggerGreeting language decision: ` +
+          JSON.stringify({
+            runId: "prompt-state-machine-v2",
+            taskLooksRussian,
+            hasHintRu: /task_language_hint:\s*ru/.test(config.systemPrompt),
+            hasHintAuto: /task_language_hint:\s*auto/.test(config.systemPrompt),
+            promptVersion: REALTIME_PROMPT_VERSION,
+          }),
+      );
+      // #endregion
+      const openingLanguageRule = taskLooksRussian
+        ? "The task is in Russian. The first spoken turn must be Russian. Use this shape: «Здравствуйте. [specific request from the task].» You are the caller with a request; do not sound like the person answering the phone."
+        : "Use the task language. First spoken turn shape: greeting plus the specific request from the task. You are the caller with a request; do not sound like the person answering the phone.";
+      const systemCue =
+        "The callee has picked up. Start state: opening. Speak the opening line now: greeting plus the concrete request from the task. " +
+        openingLanguageRule +
+        " One short conversational sentence is best; use two only if the task needs it. No pauses, no waiting, no parenthetical stage directions.";
+      const greetingResponseInstructions =
+        "Speak now as the outbound caller. Say only the opening turn: greeting plus the request from the task. " +
+        openingLanguageRule +
+        " No parentheses, no stage directions, no narration of your own actions. " +
+        "Only the spoken words the callee should hear.";
+      // #region agent log
+      agentDebugLog({
+        runId: "prompt-state-machine-v1",
+        hypothesisId: "H2-opening-cue-weak",
+        location: "asterisk-realtime.ts:triggerGreeting",
+        message: "Realtime opening cue emitted",
+        data: {
+          promptVersion: REALTIME_PROMPT_VERSION,
+          promptHash: promptHash(config.systemPrompt),
+          taskLooksRussian,
+          hasStateMachine: config.systemPrompt.includes("state: opening"),
+          hasReceptionistBoundary: config.systemPrompt.includes("чем могу помочь"),
         },
-      }));
-      ws.send(JSON.stringify({
-        type: "response.create",
-        response: {
-          modalities: ["audio", "text"],
-          output_audio_format: "g711_ulaw",
-          instructions:
-            "Speak now: ONE short phrase, greeting plus the request from the task. " +
-            "Use the same language as the task instructions. " +
-            "No parentheses, no stage directions, no narration of your own actions. " +
-            "Only the spoken words the callee should hear.",
-        },
-      }));
+      });
+      // #endregion
+      if (wireFormat === "ga") {
+        ws.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              output_modalities: ["audio"],
+              audio: {
+                output: {
+                  format: { type: "audio/pcmu" },
+                },
+              },
+              instructions: `${systemCue}\n\n${greetingResponseInstructions}`,
+            },
+          }),
+        );
+      } else {
+        ws.send(
+          JSON.stringify({
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: systemCue,
+                },
+              ],
+            },
+          }),
+        );
+        ws.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              modalities: ["audio", "text"],
+              output_audio_format: "g711_ulaw",
+              instructions: greetingResponseInstructions,
+            },
+          }),
+        );
+      }
       console.log("[asterisk-realtime] triggerGreeting sent (with explicit speak-now cue)");
     },
 
     async start(): Promise<void> {
       if (stopped) return;
 
-      const url = `wss://api.openai.com/v1/realtime?model=${config.model ?? "gpt-realtime-1.5"}`;
-      ws = new WebSocket(url, {
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          "OpenAI-Beta": "realtime=v1",
-        },
-      });
+      const realtimeModel = config.model ?? DEFAULT_ASTERISK_REALTIME_MODEL;
+      wireFormat = isGaRealtimeModelId(realtimeModel) ? "ga" : "beta";
+      const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(realtimeModel)}`;
+      const wsHeaders: Record<string, string> = {
+        Authorization: `Bearer ${config.apiKey}`,
+      };
+      // Beta: flat `session.*` + `g711_ulaw` + `OpenAI-Beta: realtime=v1`.
+      // GA (`gpt-realtime-2*`): nested `session.audio`, μ-law as `{ type: "audio/pcmu" }`, no beta header.
+      if (wireFormat === "beta") {
+        wsHeaders["OpenAI-Beta"] = "realtime=v1";
+      }
+      console.log(`[asterisk-realtime] connecting Realtime wire=${wireFormat} model=${realtimeModel}`);
+      ws = new WebSocket(url, { headers: wsHeaders });
 
       await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("OpenAI Realtime connection timeout")), 10_000);
+        const timeout = setTimeout(
+          () => reject(new Error("OpenAI Realtime connection timeout")),
+          25_000,
+        );
 
         ws!.on("open", () => {
           clearTimeout(timeout);
@@ -352,50 +551,113 @@ export function createRealtimeVoiceSession(
           // Configure session with server_vad for quality STT.
           // VAD will auto-trigger responses, but we filter them in handleMessage —
           // only audio from our speakText() calls (ourResponseActive=true) is sent to RTP.
-          ws!.send(
-            JSON.stringify({
-              type: "session.update",
-              session: {
-                modalities: ["audio", "text"],
-                voice: config.voice ?? "coral",
-                instructions: config.systemPrompt,
-                input_audio_format: "g711_ulaw",
-                output_audio_format: "g711_ulaw",
-                input_audio_transcription: { model: "gpt-4o-transcribe", language: "ru" },
-                turn_detection: {
-                  type: "server_vad",
-                  threshold: config.vadThreshold ?? 0.5,
-                  prefix_padding_ms: config.vadPrefixPaddingMs ?? 200,
-                  silence_duration_ms: config.vadSilenceDurationMs ?? 300,
-                  // Realtime auto-responds after each user turn only in
-                  // end-to-end mode. For notify/outbound where OpenClaw
-                  // renders the message via TTS API itself, disable this —
-                  // otherwise Realtime talks over our pre-recorded line.
-                  create_response: config.autoRespond ?? true,
+          const transcription: Record<string, string> = {
+            model: config.inputAudioTranscriptionModel ?? "gpt-4o-transcribe",
+          };
+          const lang = (config.inputAudioTranscriptionLanguage ?? "").trim();
+          if (lang) {
+            transcription.language = lang;
+          }
+          const sttPrompt = (config.inputAudioTranscriptionPrompt ?? "").trim();
+          if (sttPrompt) {
+            transcription.prompt = sttPrompt;
+          }
+
+          const endCallTool = {
+            type: "function" as const,
+            name: "end_call",
+            description:
+              "Call when the phone conversation is complete and you have already said goodbye. This hangs up the line. Invoke after your farewell reply, not before.",
+            parameters: {
+              type: "object",
+              properties: {
+                reason: {
+                  type: "string",
+                  description:
+                    "Short internal note: 'done' if task completed, 'cannot_help' if callee refused, 'dead_end' otherwise.",
                 },
-                tools: [
-                  {
-                    type: "function",
-                    name: "end_call",
-                    description:
-                      "Call when the phone conversation is complete and you have already said goodbye. This hangs up the line. Invoke after your farewell reply, not before.",
-                    parameters: {
-                      type: "object",
-                      properties: {
-                        reason: {
-                          type: "string",
-                          description:
-                            "Short internal note: 'done' if task completed, 'cannot_help' if callee refused, 'dead_end' otherwise.",
-                        },
+              },
+              required: [] as string[],
+            },
+          };
+
+          // #region agent log
+          agentDebugLog({
+            runId: "prompt-state-machine-v1",
+            hypothesisId: "H3-runtime-bundle-or-config-stale",
+            location: "asterisk-realtime.ts:session.update",
+            message: "Realtime session prompt version selected",
+            data: {
+              promptVersion: REALTIME_PROMPT_VERSION,
+              promptHash: promptHash(config.systemPrompt),
+              promptLength: config.systemPrompt.length,
+              wireFormat,
+              model: realtimeModel,
+              voice: config.voice ?? "coral",
+              autoRespond: config.autoRespond ?? true,
+              hasStateMachine: config.systemPrompt.includes("state: opening"),
+              hasCallerBoundary:
+                config.systemPrompt.includes("You are the caller") ||
+                config.systemPrompt.includes("Ты звонишь"),
+            },
+          });
+          // #endregion
+
+          if (wireFormat === "ga") {
+            ws!.send(
+              JSON.stringify({
+                type: "session.update",
+                session: {
+                  type: "realtime",
+                  model: realtimeModel,
+                  instructions: config.systemPrompt,
+                  output_modalities: ["audio"],
+                  audio: {
+                    input: {
+                      format: { type: "audio/pcmu" },
+                      transcription,
+                      turn_detection: {
+                        type: "server_vad",
+                        threshold: config.vadThreshold ?? 0.5,
+                        prefix_padding_ms: config.vadPrefixPaddingMs ?? 200,
+                        silence_duration_ms: config.vadSilenceDurationMs ?? 300,
+                        create_response: config.autoRespond ?? true,
                       },
-                      required: [],
+                    },
+                    output: {
+                      format: { type: "audio/pcmu" },
+                      voice: config.voice ?? "coral",
                     },
                   },
-                ],
-                tool_choice: "auto",
-              },
-            }),
-          );
+                  tools: [endCallTool],
+                  tool_choice: "auto",
+                },
+              }),
+            );
+          } else {
+            ws!.send(
+              JSON.stringify({
+                type: "session.update",
+                session: {
+                  modalities: ["audio", "text"],
+                  voice: config.voice ?? "coral",
+                  instructions: config.systemPrompt,
+                  input_audio_format: "g711_ulaw",
+                  output_audio_format: "g711_ulaw",
+                  input_audio_transcription: transcription,
+                  turn_detection: {
+                    type: "server_vad",
+                    threshold: config.vadThreshold ?? 0.5,
+                    prefix_padding_ms: config.vadPrefixPaddingMs ?? 200,
+                    silence_duration_ms: config.vadSilenceDurationMs ?? 300,
+                    create_response: config.autoRespond ?? true,
+                  },
+                  tools: [endCallTool],
+                  tool_choice: "auto",
+                },
+              }),
+            );
+          }
 
           // No initial message — OpenClaw agent handles the greeting via playTts
           if (config.initialMessage) {
@@ -409,15 +671,31 @@ export function createRealtimeVoiceSession(
                 },
               }),
             );
-            ws!.send(
-              JSON.stringify({
-                type: "response.create",
-                response: {
-                  modalities: ["audio", "text"],
-                  output_audio_format: "g711_ulaw",
-                },
-              }),
-            );
+            if (wireFormat === "ga") {
+              ws!.send(
+                JSON.stringify({
+                  type: "response.create",
+                  response: {
+                    output_modalities: ["audio"],
+                    audio: {
+                      output: {
+                        format: { type: "audio/pcmu" },
+                      },
+                    },
+                  },
+                }),
+              );
+            } else {
+              ws!.send(
+                JSON.stringify({
+                  type: "response.create",
+                  response: {
+                    modalities: ["audio", "text"],
+                    output_audio_format: "g711_ulaw",
+                  },
+                }),
+              );
+            }
           }
 
           resolve();
@@ -436,10 +714,12 @@ export function createRealtimeVoiceSession(
       // Wire RTP receiver → OpenAI (user audio in)
       rtpReceiver.onAudio = (mulawPayload: Buffer) => {
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: "input_audio_buffer.append",
-            audio: mulawPayload.toString("base64"),
-          }));
+          ws.send(
+            JSON.stringify({
+              type: "input_audio_buffer.append",
+              audio: mulawPayload.toString("base64"),
+            }),
+          );
         }
 
         // Create sender once we know the RTP source address
@@ -465,7 +745,12 @@ export function createRealtimeVoiceSession(
         // Intercept audio deltas to buffer if sender not ready
         try {
           const event = JSON.parse(data);
-          if (event.type === "response.audio.delta" && event.delta && !sender) {
+          if (
+            (event.type === "response.audio.delta" ||
+              event.type === "response.output_audio.delta") &&
+            event.delta &&
+            !sender
+          ) {
             const audio = Buffer.from(event.delta, "base64");
             if (audio.length > 0) {
               pendingAudio.push(audio);
@@ -484,7 +769,13 @@ export function createRealtimeVoiceSession(
       });
 
       ws.on("close", () => {
-        console.log("[asterisk-realtime] OpenAI WS closed");
+        console.log(
+          `[asterisk-realtime] OpenAI WS closed ` +
+            JSON.stringify({
+              calleeHeardUtterance,
+              assistantAudioTranscriptDoneCount,
+            }),
+        );
       });
     },
 

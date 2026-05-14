@@ -8,9 +8,7 @@ type CallLifecycleContext = Pick<
   CallManagerContext,
   "activeCalls" | "providerCallIdMap" | "storePath"
 > &
-  Partial<
-    Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "onCallFinalized">
-  >;
+  Partial<Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "onCallFinalized">>;
 
 function removeProviderCallMapping(
   providerCallIdMap: Map<string, string>,

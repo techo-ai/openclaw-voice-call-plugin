@@ -65,6 +65,7 @@ export class CallManager {
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
+  private outboundCooldowns = new Map<string, number>();
   private onCallFinalized: ((call: CallRecord) => void) | undefined;
 
   constructor(
@@ -264,6 +265,7 @@ export class CallManager {
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
+      outboundCooldowns: this.outboundCooldowns,
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },

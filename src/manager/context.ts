@@ -29,6 +29,7 @@ export type CallManagerTransientState = {
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
   initialMessageInFlight: Set<CallId>;
+  outboundCooldowns: Map<string, number>;
 };
 
 export type CallManagerHooks = {

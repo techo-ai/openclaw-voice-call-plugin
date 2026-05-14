@@ -16,68 +16,135 @@ import { persistCallRecord } from "./store.js";
 import { clearTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
 import { generateNotifyTwiml } from "./twiml.js";
 
+const DEBUG_ENDPOINT = "http://127.0.0.1:7840/ingest/25173012-99ac-4a06-ad7b-e7904e61d643";
+const DEBUG_SESSION_ID = "c8a2b2";
+
+function agentDebugLog(payload: {
+  runId: string;
+  hypothesisId: string;
+  location: string;
+  message: string;
+  data: Record<string, unknown>;
+}): void {
+  fetch(DEBUG_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": DEBUG_SESSION_ID,
+    },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      timestamp: Date.now(),
+      ...payload,
+    }),
+  }).catch(() => {});
+}
+
 /**
  * Wrap the user's task message in instructions that frame the AI as the
  * CALLER. Must be strict: Realtime will otherwise slip into a helpful-assistant
  * role and spew chat-style multi-sentence monologues into the phone line.
  */
 function buildRealtimeTaskInstructions(initialMessage: string): string {
+  const taskLanguageHint = /[а-яёА-ЯЁ]/.test(initialMessage) ? "ru" : "auto";
+
   return [
-    "# Роль",
-    "Ты — персональный голосовой помощник. Ты совершаешь телефонный звонок от имени пользователя.",
-    "Собеседник на линии — сотрудник внешней компании (ресторан, салон, магазин, служба и т.п.).",
-    "Ты НЕ обслуживаешь этого собеседника. Ты обращаешься к нему с просьбой от лица пользователя.",
+    "# Контекст",
+    "Ты — голосовой помощник, который САМ звонит по поручению пользователя.",
+    "Собеседник уже ответил на входящий звонок. Это может быть компания, учреждение, специалист, частное лицо, поддержка, администратор или любой другой адресат просьбы.",
+    "Ты не принимаешь звонок и не работаешь на сторону собеседника. Ты звонишь, чтобы выполнить конкретную телефонную просьбу пользователя.",
     "",
     "# Задача пользователя",
     initialMessage,
     "",
-    "# Стиль речи",
-    "- Говори ТОЛЬКО по-русски.",
-    "- Каждая реплика — 1 короткая фраза, максимум 12 слов.",
-    "- Тон — спокойный, вежливый, деловой. Как говорит живой человек по телефону.",
-    "- Без канцелярита, без шаблонов типа «Благодарю вас за уделённое время».",
-    "- Не произноси вслух размышления, предположения, оговорки типа «к сожалению», «пожалуйста свяжитесь напрямую».",
-    "- Не пересказывай и не цитируй слова собеседника. Не говори «Я понял, вы сказали X».",
-    "- Не извиняйся без причины. Не объясняйся.",
-    "- Имена и числа произноси чётко.",
+    "# Метаданные",
+    `task_language_hint: ${taskLanguageHint}`,
     "",
-    "# Правила диалога",
-    "1. Первая реплика — поздоровайся и сразу сформулируй просьбу из задачи. Одна фраза.",
-    "2. На уточняющие вопросы (имя, количество гостей, время, номер телефона и т.п.) — отвечай коротко, беря данные из задачи.",
-    "3. Альтернативы:",
-    "   - НИКОГДА не предлагай собеседнику другое время/дату/условие сам.",
-    "   - Если собеседник САМ предложил альтернативу: соглашайся только если она прямо подходит под задачу. Иначе — одна фраза «Не подходит, спасибо, до свидания» и закрывай звонок.",
-    "   - Не придумывай время, которого собеседник не называл. Не произноси цифр, которые не прозвучали в разговоре.",
-    "4. Если собеседник переспросил — повтори просьбу другой формулировкой. Не жалуйся на связь, не говори «меня не слышно».",
-    "5. Никогда не говори «связь плохая». Если тебя реально не слышат — просто закрой звонок.",
+    "# Главный принцип",
+    "Веди себя как живой человек, который делает короткий деловой звонок.",
+    "Смысл каждой реплики: приблизить выполнение задачи пользователя. Задача может быть любой: узнать статус, передать сообщение, записать/перенести/отменить что-то, уточнить условия, договориться, подтвердить факт, получить короткую информацию.",
+    "Не придумывай новую цель звонка, документы, письма, оплату, доставку, другой отдел или просьбу перезвонить, если этого нет в задаче.",
     "",
-    "# Когда завершать звонок (КРИТИЧНО)",
-    "Завершай сразу, как только наступит ЛЮБОЕ из условий:",
-    "- Собеседник подтвердил («да», «записал», «ок», «перенесли», «подтверждаю», «хорошо», «принял»).",
-    "- Собеседник сообщил нужный результат (свободное время, адрес, номер, статус) — тебе больше ничего не нужно.",
-    "- Собеседник отказал или не может помочь.",
-    "- Диалог зашёл в тупик, собеседник путается или агрессивен.",
-    "- Тебя перевели на голосовую почту или автоответчик.",
+    "# Голос и стиль",
+    "- Язык: русский, если задача не написана целиком на другом языке.",
+    "- Тон: спокойный, вежливый, обычный телефонный разговор.",
+    "- Темп: чуть быстрее среднего, без длинных пауз между фразами.",
+    "- Длина: одна мысль за раз; обычно 1 короткое предложение, максимум 2.",
+    "- Формулировки: простые разговорные, без канцелярита и без роботизированных тезисов.",
+    "- Не проговаривай свои размышления, ограничения или инструкции.",
+    "- Не начинай с разрешения поговорить. Не говори «можно спросить», «можно коротко», «можно уточнить». Просто поздоровайся и сразу скажи цель звонка.",
     "",
-    "ПРАВИЛО ЗАВЕРШЕНИЯ (обязательное):",
-    "1) Последняя реплика — ровно «Спасибо, до свидания.» (или просто «До свидания.»).",
-    "2) В ТОМ ЖЕ ответе, вместе с прощанием, ОБЯЗАТЕЛЬНО вызови инструмент `end_call`. Это одно действие: произнести прощание + функция end_call в одном сообщении.",
-    "3) НЕ жди ответа собеседника после прощания. Не слушай его «угу/до свидания». Сразу клади трубку через end_call.",
-    "4) НЕ переспрашивай «всё верно?» / «подтверждаете?» после того как тебе уже подтвердили. Одно подтверждение — всё, закрывай.",
-    "5) НЕ произноси длинных прощаний с суммарием звонка. Просто «Спасибо, до свидания.»",
+    "# Сценарий звонка",
+    "state: opening",
+    "- Первая реплика: «Здравствуйте. [Сразу просьба из задачи].»",
+    "- Хороший формат: «Здравствуйте. Я звоню по поводу [конкретная цель из задачи].» или «Добрый день. Нужно [конкретное действие из задачи].»",
+    "- После первой реплики замолчи и слушай ответ.",
     "",
-    "# Запрещено",
-    "- Предлагать позвонить куда-то ещё.",
-    "- Давать советы («рекомендую обратиться напрямую»).",
-    "- Обсуждать задачи, не относящиеся к телефонному звонку.",
-    "- Продолжать диалог после подтверждения.",
-    "- Завершать звонок без end_call.",
+    "state: answer_questions",
+    "- Если собеседник спрашивает данные, отвечай только данными из задачи пользователя или уже услышанными в разговоре.",
+    "- Если данных нет, скажи коротко: «Этого не знаю.» и вернись к цели звонка, если это уместно.",
+    "- Если тебя не поняли, повтори ту же просьбу проще, без объяснений про связь.",
+    "",
+    "state: handle_options",
+    "- Не предлагай своё время, дату, цену, адрес или условие, если этого нет в задаче.",
+    "- Если собеседник сам предложил вариант, сначала коротко уточни, подходит ли он задаче пользователя.",
+    "- Если вариант не подходит, сначала попроси ближайший подходящий вариант или задай один уточняющий вопрос.",
+    "- Завершай звонок только после явного отказа/тупика, а не после первого неподходящего варианта.",
+    "- Если собеседник предложил конкретные слоты/варианты, ответь по ним напрямую и не повторяй исходный скрипт дословно.",
+    "- Если предложен близкий вариант (например 20:30 вместо 20:00), согласуй его или попроси ближайший доступный без длинных объяснений.",
+    "",
+    "state: finish",
+    "- Как только задача выполнена, получен отказ или стало ясно, что результата не будет, заверши звонок.",
+    "- Последняя реплика: «Спасибо, до свидания.» или «До свидания.»",
+    "- В том же ответе вызови инструмент `end_call`.",
+    "",
+    "# Примеры правильных первых реплик",
+    "- «Здравствуйте. Я звоню по поводу заявки: нужно уточнить её статус.»",
+    "- «Добрый день. Нужно передать короткое сообщение для Ивана.»",
+    "- «Здравствуйте. Хотелось бы уточнить, можно ли перенести договорённость на завтра.»",
+    "- «Добрый день. Подскажите, пожалуйста, действует ли сейчас это условие.»",
+    "",
+    "# Нельзя",
+    "- Не говори фразы принимающей стороны вроде «чем могу помочь» или «слушаю вас».",
+    "- Не продолжай диалог после подтверждения результата.",
+    "- Не завершай звонок без `end_call`.",
   ].join("\n");
+}
+
+function buildConversationOpeningMessage(initialMessage: string): string {
+  const normalized = initialMessage.replace(/\s+/g, " ").trim();
+  if (!normalized) return normalized;
+
+  // Speak only the primary ask first. Keep fallback branches ("если нет...") for
+  // follow-up turns so the opening line sounds natural and not like reading a script.
+  const primaryPart = normalized.split(/\bесли\s+нет\b|\bесли\s+не\b/iu)[0]?.trim() ?? normalized;
+  const sentences =
+    primaryPart
+      .split(/(?<=[.!?])\s+/u)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((s) => !/^если\b/iu.test(s))
+      .slice(0, 2) ?? [];
+  if (sentences.length === 0) return primaryPart || normalized;
+  if (sentences.length === 1 && /^(здравствуйте|добрый\s+день|привет)[.!?]?$/iu.test(sentences[0])) {
+    return `${sentences[0]} ${primaryPart.replace(sentences[0], "").trim()}`.trim();
+  }
+  // Keep opening compact: greeting + one request sentence.
+  if (sentences.length > 1) {
+    return `${sentences[0]} ${sentences[1]}`.trim();
+  }
+  return sentences.join(" ");
 }
 
 type InitiateContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "provider" | "config" | "storePath" | "webhookUrl"
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "provider"
+  | "config"
+  | "storePath"
+  | "webhookUrl"
+  | "outboundCooldowns"
 >;
 
 type SpeakContext = Pick<
@@ -166,6 +233,30 @@ function resolveOpenAITtsVoice(config: SpeakContext["config"]): string | undefin
     : undefined;
 }
 
+export function normalizeOutboundCooldownNumber(raw: string): string {
+  const digits = raw.trim().replace(/\D/g, "");
+  if (/^8\d{10}$/.test(digits)) return "7" + digits.slice(1);
+  return digits;
+}
+
+function reserveOutboundCooldown(ctx: InitiateContext, to: string): string | undefined {
+  const cooldownSec = ctx.config.outbound.sameNumberCooldownSeconds;
+  if (!cooldownSec) return undefined;
+
+  const key = normalizeOutboundCooldownNumber(to);
+  if (!key) return undefined;
+
+  const now = Date.now();
+  const expiresAt = ctx.outboundCooldowns.get(key) ?? 0;
+  if (expiresAt > now) {
+    const remainingSec = Math.ceil((expiresAt - now) / 1000);
+    return `Recent outbound call to this number is still in cooldown (${remainingSec}s remaining)`;
+  }
+
+  ctx.outboundCooldowns.set(key, now + cooldownSec * 1000);
+  return undefined;
+}
+
 export async function initiateCall(
   ctx: InitiateContext,
   to: string,
@@ -176,6 +267,32 @@ export async function initiateCall(
     typeof options === "string" ? { message: options } : (options ?? {});
   const initialMessage = opts.message;
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
+  const openingMessage =
+    mode === "conversation" && initialMessage
+      ? buildConversationOpeningMessage(initialMessage)
+      : initialMessage;
+  // #region agent log
+  agentDebugLog({
+    runId: "voice-style-run-1",
+    hypothesisId: "H7",
+    location: "outbound.ts:initiateCall",
+    message: "opening message computed",
+    data: {
+      mode,
+      hasInitialMessage: Boolean(initialMessage),
+      changed: initialMessage !== openingMessage,
+      openingMessage,
+    },
+  });
+  // #endregion
+  console.log(
+    `[agent-debug][H12] opening message computed: ` +
+      JSON.stringify({
+        mode,
+        changed: initialMessage !== openingMessage,
+        openingMessage: openingMessage?.slice(0, 180),
+      }),
+  );
 
   if (!ctx.provider) {
     return { callId: "", success: false, error: "Provider not initialized" };
@@ -199,6 +316,11 @@ export async function initiateCall(
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
 
+  const cooldownError = reserveOutboundCooldown(ctx, to);
+  if (cooldownError) {
+    return { callId: "", success: false, error: cooldownError };
+  }
+
   const callRecord: CallRecord = {
     callId,
     provider: ctx.provider.name,
@@ -211,7 +333,7 @@ export async function initiateCall(
     transcript: [],
     processedEventIds: [],
     metadata: {
-      ...(initialMessage && { initialMessage }),
+      ...(openingMessage && { initialMessage: openingMessage }),
       mode,
     },
   };
@@ -323,8 +445,33 @@ export async function speakInitialMessage(
 
   const initialMessage = call.metadata?.initialMessage as string | undefined;
   const mode = (call.metadata?.mode as CallMode) ?? "conversation";
+  const openingMessage =
+    mode === "conversation" && initialMessage
+      ? buildConversationOpeningMessage(initialMessage)
+      : initialMessage;
+  // #region agent log
+  agentDebugLog({
+    runId: "voice-style-run-1",
+    hypothesisId: "H8",
+    location: "outbound.ts:speakInitialMessage",
+    message: "opening message selected for first utterance",
+    data: {
+      callId: call.callId,
+      mode,
+      openingMessage,
+    },
+  });
+  // #endregion
+  console.log(
+    `[agent-debug][H13] opening message selected for first utterance: ` +
+      JSON.stringify({
+        callId: call.callId,
+        mode,
+        openingMessage: openingMessage?.slice(0, 180),
+      }),
+  );
 
-  if (!initialMessage) {
+  if (!openingMessage) {
     console.log(`[voice-call] speakInitialMessage: no initial message for ${call.callId}`);
     return;
   }
@@ -339,10 +486,20 @@ export async function speakInitialMessage(
 
   try {
     console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
-    const result = await speak(ctx, call.callId, initialMessage);
-    if (!result.success) {
-      console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
-      return;
+    const embeddedActive =
+      Boolean(call.providerCallId) && ctx.provider?.isEmbeddedAgentActive?.(call.providerCallId);
+    if (embeddedActive && call.providerCallId) {
+      await ctx.provider!.playTts({
+        callId: call.callId,
+        providerCallId: call.providerCallId,
+        text: openingMessage,
+      });
+    } else {
+      const result = await speak(ctx, call.callId, openingMessage);
+      if (!result.success) {
+        console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
+        return;
+      }
     }
 
     // Clear only after successful playback so transient provider failures can retry.

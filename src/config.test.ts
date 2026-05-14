@@ -227,8 +227,20 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
     expect(normalized.streaming.sttModel).toBe("gpt-4o-transcribe");
+    expect(normalized.outbound.sameNumberCooldownSeconds).toBe(0);
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+  });
+
+  it("accepts a same-number outbound cooldown", () => {
+    const normalized = normalizeVoiceCallConfig({
+      outbound: {
+        sameNumberCooldownSeconds: 45,
+      },
+    });
+
+    expect(normalized.outbound.defaultMode).toBe("notify");
+    expect(normalized.outbound.sameNumberCooldownSeconds).toBe(45);
   });
 
   it("accepts partial nested TTS overrides and preserves nested objects", () => {

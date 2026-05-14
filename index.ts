@@ -81,6 +81,10 @@ const voiceCallConfigSchema = {
       label: "Notify Hangup Delay (sec)",
       advanced: true,
     },
+    "outbound.sameNumberCooldownSeconds": {
+      label: "Same Number Cooldown (sec)",
+      advanced: true,
+    },
     "serve.port": { label: "Webhook Port" },
     "serve.bind": { label: "Webhook Bind" },
     "serve.path": { label: "Webhook Path" },

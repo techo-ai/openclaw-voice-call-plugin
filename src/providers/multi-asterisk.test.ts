@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { InitiateCallInput } from "../types.js";
 import type { AsteriskProvider } from "./asterisk.js";
 import { MultiAsteriskProvider } from "./multi-asterisk.js";
-import type { InitiateCallInput } from "../types.js";
 
 function createProvider(providerCallId: string, status = "in-progress") {
   return {
@@ -116,9 +116,7 @@ describe("MultiAsteriskProvider", () => {
       { name: "secondary", routePrefixes: ["44"], provider: secondary },
     ]);
 
-    await expect(provider.connect()).rejects.toThrow(
-      /all cluster ARI initial connections failed/,
-    );
+    await expect(provider.connect()).rejects.toThrow(/all cluster ARI initial connections failed/);
     warn.mockRestore();
   });
 });

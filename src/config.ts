@@ -74,9 +74,7 @@ export const AsteriskInboundProfileOverrideSchema = z
     systemPrompt: z.string().min(1).optional(),
   })
   .strict();
-export type AsteriskInboundProfileOverride = z.infer<
-  typeof AsteriskInboundProfileOverrideSchema
->;
+export type AsteriskInboundProfileOverride = z.infer<typeof AsteriskInboundProfileOverrideSchema>;
 
 export const AsteriskInboundProfilesConfigSchema = z
   .object({
@@ -88,9 +86,7 @@ export const AsteriskInboundProfilesConfigSchema = z
     overrides: z.array(AsteriskInboundProfileOverrideSchema).default([]),
   })
   .strict();
-export type AsteriskInboundProfilesConfig = z.infer<
-  typeof AsteriskInboundProfilesConfigSchema
->;
+export type AsteriskInboundProfilesConfig = z.infer<typeof AsteriskInboundProfilesConfigSchema>;
 
 export const AsteriskOutboundNumberRewriteSchema = z
   .object({
@@ -102,9 +98,14 @@ export const AsteriskOutboundNumberRewriteSchema = z
     flags: z.string().optional(),
   })
   .strict();
-export type AsteriskOutboundNumberRewrite = z.infer<
-  typeof AsteriskOutboundNumberRewriteSchema
->;
+export type AsteriskOutboundNumberRewrite = z.infer<typeof AsteriskOutboundNumberRewriteSchema>;
+
+/**
+ * Default Realtime model for Asterisk calls.
+ * `gpt-realtime-2` uses the GA Realtime wire (nested `session.audio`, no `OpenAI-Beta` header).
+ * Older ids such as `gpt-realtime-1.5` still use the beta payload + `OpenAI-Beta: realtime=v1`.
+ */
+export const DEFAULT_ASTERISK_REALTIME_MODEL = "gpt-realtime-2";
 
 export const AsteriskConfigSchema = z
   .object({
@@ -134,6 +135,17 @@ export const AsteriskConfigSchema = z
     realtimeSystemPrompt: z.string().optional(),
     /** Voice id for the OpenAI Realtime session (e.g. "shimmer", "nova", "ash"). */
     realtimeVoice: z.string().optional(),
+    /** OpenAI Realtime model id for phone sessions. */
+    realtimeModel: z.string().min(1).default(DEFAULT_ASTERISK_REALTIME_MODEL),
+    /**
+     * ISO-like language code for Realtime callee STT (e.g. "ru", "es", "kk").
+     * If omitted, language is not sent and the transcription model may auto-detect.
+     */
+    realtimeInputTranscriptionLanguage: z.string().optional(),
+    /** Override Realtime STT model (default gpt-4o-transcribe). */
+    realtimeInputTranscriptionModel: z.string().optional(),
+    /** Short hint for STT: venue names, menu terms, mixed languages. */
+    realtimeInputTranscriptionPrompt: z.string().optional(),
     /** Inbound Asterisk greeting/prompt profiles, optionally matched by caller number. */
     inboundProfiles: AsteriskInboundProfilesConfigSchema.optional(),
     /**
@@ -280,9 +292,11 @@ export const OutboundConfigSchema = z
     defaultMode: CallModeSchema.default("notify"),
     /** Seconds to wait after TTS before auto-hangup in notify mode */
     notifyHangupDelaySec: z.number().int().nonnegative().default(3),
+    /** Seconds to suppress repeat outbound calls to the same normalized number. Set 0 to disable. */
+    sameNumberCooldownSeconds: z.number().int().nonnegative().default(0),
   })
   .strict()
-  .default({ defaultMode: "notify", notifyHangupDelaySec: 3 });
+  .default({ defaultMode: "notify", notifyHangupDelaySec: 3, sameNumberCooldownSeconds: 0 });
 export type OutboundConfig = z.infer<typeof OutboundConfigSchema>;
 
 // -----------------------------------------------------------------------------
@@ -532,8 +546,10 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   if (resolved.provider === "asterisk") {
     resolved.asterisk = resolved.asterisk ?? {};
     resolved.asterisk.ariUrl = resolved.asterisk.ariUrl ?? process.env.ASTERISK_ARI_URL;
-    resolved.asterisk.ariUsername = resolved.asterisk.ariUsername ?? process.env.ASTERISK_ARI_USERNAME;
-    resolved.asterisk.ariPassword = resolved.asterisk.ariPassword ?? process.env.ASTERISK_ARI_PASSWORD;
+    resolved.asterisk.ariUsername =
+      resolved.asterisk.ariUsername ?? process.env.ASTERISK_ARI_USERNAME;
+    resolved.asterisk.ariPassword =
+      resolved.asterisk.ariPassword ?? process.env.ASTERISK_ARI_PASSWORD;
     resolved.asterisk.stasisApp = resolved.asterisk.stasisApp ?? process.env.ASTERISK_STASIS_APP;
   }
 

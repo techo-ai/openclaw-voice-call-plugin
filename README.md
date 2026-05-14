@@ -24,6 +24,20 @@ openclaw plugins install @openclaw/voice-call
 
 Restart the Gateway afterwards.
 
+### Option C: bundled OpenClaw fork (techo-ai)
+
+This repo is the **canonical source** for our Asterisk + Realtime fork. With an OpenClaw clone at `../openclaw` (sibling directory), run:
+
+```bash
+./scripts/sync-into-openclaw.sh
+```
+
+That mirrors sources into `../openclaw/extensions/voice-call/` for Docker or monorepo builds.
+
+### Server: update plugin without rebuilding the OpenClaw image
+
+Mount the plugin directory into the container and register it with **`plugins.load.paths`** (see OpenClaw docs for `plugins.load.paths`). A plain copy under `~/.openclaw/extensions/` may **not** override the bundled `voice-call` inside the image; `load.paths` uses origin `config` and wins. After setup: rsync this repo to the host path, then `docker compose restart <openclaw-service>` — no full image rebuild for plugin-only changes. Operational checklist: `AGENTS.md` in the techo-ai repo (section *Fast deploy: voice-call…*).
+
 ### Option B: copy into your global extensions folder (dev)
 
 ```bash
@@ -67,9 +81,7 @@ Put under `plugins.entries.voice-call.config`:
     stasisApp: "openclaw",
     sipTrunk: "carrier-trunk",
     callerId: "15550001234",
-    outboundNumberRewrites: [
-      { pattern: "^7(\\d{10})$", replace: "8$1" },
-    ],
+    outboundNumberRewrites: [{ pattern: "^7(\\d{10})$", replace: "8$1" }],
     realtimeVoice: "marin",
     inboundProfiles: {
       defaultGreeting: "Hello, this is the voice assistant. How can I help?",
@@ -97,6 +109,7 @@ Put under `plugins.entries.voice-call.config`:
 
   outbound: {
     defaultMode: "notify", // or "conversation"
+    sameNumberCooldownSeconds: 0, // set >0 to suppress immediate repeat dials
   },
 
   streaming: {

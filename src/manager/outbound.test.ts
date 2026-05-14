@@ -48,7 +48,7 @@ vi.mock("./twiml.js", () => ({
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
-import { endCall, initiateCall, speak } from "./outbound.js";
+import { endCall, initiateCall, normalizeOutboundCooldownNumber, speak } from "./outbound.js";
 
 describe("voice-call outbound helpers", () => {
   beforeEach(() => {
@@ -63,8 +63,13 @@ describe("voice-call outbound helpers", () => {
       providerCallIdMap: new Map(),
       config: {
         maxConcurrentCalls: 1,
-        outbound: { defaultMode: "conversation", notifyHangupDelaySec: 0 },
+        outbound: {
+          defaultMode: "conversation",
+          notifyHangupDelaySec: 0,
+          sameNumberCooldownSeconds: 0,
+        },
       },
+      outboundCooldowns: new Map(),
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
     };
@@ -123,10 +128,11 @@ describe("voice-call outbound helpers", () => {
       provider: { name: "twilio", initiateCall: initiateProviderCall },
       config: {
         maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
+        outbound: { defaultMode: "conversation", sameNumberCooldownSeconds: 0 },
         fromNumber: "+14155550100",
         tts: { providers: { openai: { voice: "nova" } } },
       },
+      outboundCooldowns: new Map(),
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
     };
@@ -154,6 +160,38 @@ describe("voice-call outbound helpers", () => {
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 
+  it("suppresses immediate repeat outbound calls to the same normalized number", async () => {
+    expect(normalizeOutboundCooldownNumber("+77123456789")).toBe("77123456789");
+    expect(normalizeOutboundCooldownNumber("8 (712) 345-67-89")).toBe("77123456789");
+
+    const initiateProviderCall = vi.fn(async () => ({
+      providerCallId: `provider-${initiateProviderCall.mock.calls.length}`,
+    }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "mock", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation", sameNumberCooldownSeconds: 60 },
+        fromNumber: "+15550001000",
+      },
+      outboundCooldowns: new Map(),
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    await expect(initiateCall(ctx as never, "+77123456789")).resolves.toMatchObject({
+      success: true,
+    });
+    await expect(initiateCall(ctx as never, "8 (712) 345-67-89")).resolves.toMatchObject({
+      callId: "",
+      success: false,
+      error: expect.stringContaining("cooldown"),
+    });
+    expect(initiateProviderCall).toHaveBeenCalledTimes(1);
+  });
+
   it("fails initiateCall cleanly when provider initiation throws", async () => {
     const ctx = {
       activeCalls: new Map(),
@@ -166,8 +204,9 @@ describe("voice-call outbound helpers", () => {
       },
       config: {
         maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
+        outbound: { defaultMode: "conversation", sameNumberCooldownSeconds: 0 },
       },
+      outboundCooldowns: new Map(),
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
     };

@@ -85,6 +85,10 @@
       "label": "Notify Hangup Delay (sec)",
       "advanced": true
     },
+    "outbound.sameNumberCooldownSeconds": {
+      "label": "Same Number Cooldown (sec)",
+      "advanced": true
+    },
     "serve.port": {
       "label": "Webhook Port"
     },
@@ -205,13 +209,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": [
-          "telnyx",
-          "twilio",
-          "plivo",
-          "asterisk",
-          "mock"
-        ]
+        "enum": ["telnyx", "twilio", "plivo", "asterisk", "mock"]
       },
       "telnyx": {
         "type": "object",
@@ -282,9 +280,9 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "pattern": {"type": "string"},
-                "replace": {"type": "string"},
-                "flags": {"type": "string"}
+                "pattern": { "type": "string" },
+                "replace": { "type": "string" },
+                "flags": { "type": "string" }
               },
               "required": ["pattern", "replace"]
             }
@@ -302,6 +300,19 @@
             "type": "string"
           },
           "realtimeVoice": {
+            "type": "string"
+          },
+          "realtimeModel": {
+            "type": "string",
+            "description": "OpenAI Realtime model for Asterisk calls (default: gpt-realtime-2). Models starting with gpt-realtime-2 use the GA Realtime wire; gpt-realtime-1.5 and similar ids use the legacy beta session shape."
+          },
+          "realtimeInputTranscriptionLanguage": {
+            "type": "string"
+          },
+          "realtimeInputTranscriptionModel": {
+            "type": "string"
+          },
+          "realtimeInputTranscriptionPrompt": {
             "type": "string"
           },
           "inboundProfiles": {
@@ -322,7 +333,7 @@
                   "properties": {
                     "callerNumbers": {
                       "type": "array",
-                      "items": {"type": "string"},
+                      "items": { "type": "string" },
                       "minItems": 1
                     },
                     "greeting": {
@@ -344,38 +355,45 @@
         "items": {
           "type": "object",
           "properties": {
-            "name": {"type": "string"},
-            "ariUrl": {"type": "string"},
-            "ariUsername": {"type": "string"},
-            "ariPassword": {"type": "string"},
-            "stasisApp": {"type": "string"},
-            "context": {"type": "string"},
-            "callerId": {"type": "string"},
-            "sipTrunk": {"type": "string"},
+            "name": { "type": "string" },
+            "ariUrl": { "type": "string" },
+            "ariUsername": { "type": "string" },
+            "ariPassword": { "type": "string" },
+            "stasisApp": { "type": "string" },
+            "context": { "type": "string" },
+            "callerId": { "type": "string" },
+            "sipTrunk": { "type": "string" },
             "outboundNumberRewrites": {
               "type": "array",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "pattern": {"type": "string"},
-                  "replace": {"type": "string"},
-                  "flags": {"type": "string"}
+                  "pattern": { "type": "string" },
+                  "replace": { "type": "string" },
+                  "flags": { "type": "string" }
                 },
                 "required": ["pattern", "replace"]
               }
             },
-            "ttsSpoolDir": {"type": "string"},
-            "audioUploadUrl": {"type": "string"},
-            "audioUploadToken": {"type": "string"},
-            "realtimeSystemPrompt": {"type": "string"},
-            "realtimeVoice": {"type": "string"},
+            "ttsSpoolDir": { "type": "string" },
+            "audioUploadUrl": { "type": "string" },
+            "audioUploadToken": { "type": "string" },
+            "realtimeSystemPrompt": { "type": "string" },
+            "realtimeVoice": { "type": "string" },
+            "realtimeModel": {
+              "type": "string",
+              "description": "OpenAI Realtime model for Asterisk calls (default: gpt-realtime-2). Models starting with gpt-realtime-2 use the GA Realtime wire; gpt-realtime-1.5 and similar ids use the legacy beta session shape."
+            },
+            "realtimeInputTranscriptionLanguage": { "type": "string" },
+            "realtimeInputTranscriptionModel": { "type": "string" },
+            "realtimeInputTranscriptionPrompt": { "type": "string" },
             "inboundProfiles": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "defaultGreeting": {"type": "string"},
-                "defaultSystemPrompt": {"type": "string"},
+                "defaultGreeting": { "type": "string" },
+                "defaultSystemPrompt": { "type": "string" },
                 "overrides": {
                   "type": "array",
                   "items": {
@@ -384,11 +402,11 @@
                     "properties": {
                       "callerNumbers": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": { "type": "string" },
                         "minItems": 1
                       },
-                      "greeting": {"type": "string"},
-                      "systemPrompt": {"type": "string"}
+                      "greeting": { "type": "string" },
+                      "systemPrompt": { "type": "string" }
                     },
                     "required": ["callerNumbers"]
                   }
@@ -397,9 +415,9 @@
             },
             "routePrefixes": {
               "type": "array",
-              "items": {"type": "string"}
+              "items": { "type": "string" }
             },
-            "default": {"type": "boolean"}
+            "default": { "type": "boolean" }
           }
         }
       },
@@ -413,12 +431,7 @@
       },
       "inboundPolicy": {
         "type": "string",
-        "enum": [
-          "disabled",
-          "allowlist",
-          "pairing",
-          "open"
-        ]
+        "enum": ["disabled", "allowlist", "pairing", "open"]
       },
       "allowFrom": {
         "type": "array",
@@ -436,12 +449,13 @@
         "properties": {
           "defaultMode": {
             "type": "string",
-            "enum": [
-              "notify",
-              "conversation"
-            ]
+            "enum": ["notify", "conversation"]
           },
           "notifyHangupDelaySec": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sameNumberCooldownSeconds": {
             "type": "integer",
             "minimum": 0
           }
@@ -493,11 +507,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": [
-              "off",
-              "serve",
-              "funnel"
-            ]
+            "enum": ["off", "serve", "funnel"]
           },
           "path": {
             "type": "string"
@@ -510,12 +520,7 @@
         "properties": {
           "provider": {
             "type": "string",
-            "enum": [
-              "none",
-              "ngrok",
-              "tailscale-serve",
-              "tailscale-funnel"
-            ]
+            "enum": ["none", "ngrok", "tailscale-serve", "tailscale-funnel"]
           },
           "ngrokAuthToken": {
             "type": "string"
@@ -558,9 +563,7 @@
           },
           "sttProvider": {
             "type": "string",
-            "enum": [
-              "openai-realtime"
-            ]
+            "enum": ["openai-realtime"]
           },
           "openaiApiKey": {
             "type": "string"
@@ -610,9 +613,7 @@
         "properties": {
           "provider": {
             "type": "string",
-            "enum": [
-              "openai"
-            ]
+            "enum": ["openai"]
           },
           "model": {
             "type": "string"
@@ -625,22 +626,14 @@
         "properties": {
           "auto": {
             "type": "string",
-            "enum": [
-              "off",
-              "always",
-              "inbound",
-              "tagged"
-            ]
+            "enum": ["off", "always", "inbound", "tagged"]
           },
           "enabled": {
             "type": "boolean"
           },
           "mode": {
             "type": "string",
-            "enum": [
-              "final",
-              "all"
-            ]
+            "enum": ["final", "all"]
           },
           "provider": {
             "type": "string"
@@ -701,11 +694,7 @@
               },
               "applyTextNormalization": {
                 "type": "string",
-                "enum": [
-                  "auto",
-                  "on",
-                  "off"
-                ]
+                "enum": ["auto", "on", "off"]
               },
               "languageCode": {
                 "type": "string"
