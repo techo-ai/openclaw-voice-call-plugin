@@ -11,6 +11,7 @@
 
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
+  CallId,
   GetCallStatusInput,
   GetCallStatusResult,
   HangupCallInput,
@@ -19,6 +20,7 @@ import type {
   NormalizedEvent,
   PlayTtsInput,
   ProviderWebhookParseResult,
+  RecordedCallOutcome,
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
@@ -158,6 +160,18 @@ export class MultiAsteriskProvider implements VoiceCallProvider {
   isEmbeddedAgentActive(providerCallId: string): boolean {
     const p = this.providerFor(providerCallId);
     return p ? p.isEndToEnd(providerCallId) : false;
+  }
+
+  /**
+   * Internal callId is unique per call (UUID); we don't know which cluster
+   * created it, so query every cluster and return the first non-null result.
+   */
+  getRecordedOutcome(callId: CallId): RecordedCallOutcome | null {
+    for (const { provider } of this.clusters) {
+      const outcome = provider.getRecordedOutcome(callId);
+      if (outcome) return outcome;
+    }
+    return null;
   }
 
   // ---- Fan-out configuration helpers ----

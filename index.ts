@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import {
   definePluginEntry,
   type GatewayRequestHandlerOptions,
@@ -175,9 +175,10 @@ const VoiceCallToolSchema = Type.Union([
 ]);
 
 export default definePluginEntry({
-  id: "voice-call",
-  name: "Voice Call",
-  description: "Voice-call plugin with Telnyx, Twilio, Plivo, Asterisk, and mock providers",
+  id: "voice-call-asterisk",
+  name: "Voice Call (Asterisk + Realtime)",
+  description:
+    "Voice-call plugin with Telnyx, Twilio, Plivo, Asterisk (multi-cluster ARI + OpenAI Realtime end-to-end agent), and mock providers. Distinct id from the bundled openclaw 'voice-call' so it can live alongside without schema clashes.",
   configSchema: voiceCallConfigSchema,
   register(api: OpenClawPluginApi) {
     const config = resolveVoiceCallConfig(voiceCallConfigSchema.parse(api.pluginConfig));
@@ -431,15 +432,44 @@ export default definePluginEntry({
     api.registerTool({
       name: "voice_call",
       label: "Voice Call",
-      description: `Make phone calls and have full voice conversations.
+      description: `Place a phone call and have a real voice conversation on the user's behalf.
 
-CONVERSATION MODE (mode: "conversation"):
-1. Use initiate_call with mode "conversation" to call someone and speak a greeting. The tool BLOCKS until the person responds — you will receive their spoken response as "userResponse" in the result.
-2. Use continue_call with the callId and your next message. The tool speaks your message, waits for their response, and returns their transcript.
-3. Repeat continue_call as many turns as needed for a full conversation.
-4. Use end_call when done. Then report the conversation back to the user.
+ALWAYS use action="initiate_call" with mode="conversation" for any real call.
+In this mode an embedded live AI on the phone handles the entire conversation
+end-to-end. You do NOT call continue_call or speak_to_user — the live agent
+already speaks and listens through the phone.
 
-You CAN hear what the person says and have a real back-and-forth conversation. Always use mode "conversation" when the user wants you to talk to someone.`,
+CRITICAL: the "message" param is the OPENING line the bot will speak to the
+person who picks up. Keep it SHORT — ONE sentence, ≤15 words, plain spoken
+Russian. Treat it like the FIRST thing you'd say after «Алло». Do NOT pack
+multiple conditions, fallback options, or meta-instructions ("если..., то...",
+"если для брони нужен..., то скажите...", "в конце зафиксируйте результат...")
+into the message. Just the immediate ask, e.g.:
+  "Здравствуйте. Подскажите, есть ли свободный столик на двоих на 21:30 сегодня?"
+NOT: "Здравствуйте. Я звоню от имени Темирлана по поводу столика. Если на
+20:00 нет, спросите про 21:00..." — that is a task brief, not speech.
+The live agent already has its own brief in the session prompt; the message
+is only the opening utterance. Long messages cause the bot to recite a
+monologue at the callee, which is broken UX.
+
+Also: do NOT include "от имени <name>", "по поручению <name>", "меня зовут"
+in the message — the bot calls anonymously and provides the name only if
+asked for booking. The name comes from the user task (which you pass
+implicitly via the call), not from the spoken opening.
+
+The tool BLOCKS until the call ends (or up to ~90s) and returns:
+- "outcome":   structured result the live agent recorded — { status, summary, details }
+               where status is one of: done | partial | no_result | voicemail | unclear.
+               This is what you report back to the user.
+- "transcript": full call transcript (both sides) as an array of { speaker, text }.
+- "ended" and "endReason": call lifecycle info.
+
+If "outcome" is present, prefer its "summary" verbatim when telling the user
+what happened. Do NOT make a second call to the same number based on a partial
+result — accept what was offered or ask the user before retrying.
+
+continue_call / speak_to_user are legacy paths kept only for non-Asterisk
+providers; never call them after initiate_call returns in conversation mode.`,
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const json = (payload: unknown) => ({
@@ -476,13 +506,65 @@ You CAN hear what the person says and have a real back-and-forth conversation. A
                   throw new Error(result.error || "initiate failed");
                 }
 
-                // For conversation mode, wait for the user's first response after the greeting.
-                // This makes the agent aware of the conversation and enables continue_call loop.
+                // Conversation mode with an embedded live agent (Asterisk + OpenAI
+                // Realtime) drives turn-taking on the phone itself. Block the tool
+                // until the call ends (or a short watchdog fires) and return the
+                // structured outcome + full transcript so the caller-side agent can
+                // report back to the user without doing continue_call gymnastics.
                 if (callMode === "conversation") {
-                  // Poll until call is connected (answered + initial message done)
                   const callId = result.callId!;
-                  const maxWaitMs = 60_000;
+                  const provider = rt.manager.getProvider();
+                  const isEmbedded =
+                    provider?.isEmbeddedAgentActive?.(
+                      rt.manager.getCall(callId)?.providerCallId ?? "",
+                    ) ?? false;
+                  // Hard cap so the OpenClaw main agent's LLM request doesn't time
+                  // out on long calls. Slightly under typical 120s LLM timeouts.
+                  const maxWaitMs = 90_000;
                   const startedAt = Date.now();
+
+                  if (isEmbedded) {
+                    while (Date.now() - startedAt < maxWaitMs) {
+                      const call = rt.manager.getCall(callId);
+                      if (!call) break; // already finalized & evicted
+                      const terminal = new Set([
+                        "completed",
+                        "hangup-user",
+                        "hangup-bot",
+                        "timeout",
+                        "error",
+                        "failed",
+                        "no-answer",
+                        "busy",
+                        "voicemail",
+                      ]);
+                      if (terminal.has(call.state)) break;
+                      await new Promise((r) => setTimeout(r, 500));
+                    }
+                    const finalCall =
+                      rt.manager.getCall(callId) ??
+                      (await rt.manager.getCallHistory(20)).find((c) => c.callId === callId) ??
+                      null;
+                    const outcome = provider?.getRecordedOutcome?.(callId) ?? null;
+                    const transcript = finalCall?.transcript ?? [];
+                    const endReason = finalCall?.endReason;
+                    const ended = Boolean(finalCall?.endedAt) || !rt.manager.getCall(callId);
+                    return json({
+                      callId,
+                      initiated: true,
+                      ended,
+                      endReason: endReason ?? null,
+                      outcome,
+                      transcript,
+                      hint: outcome
+                        ? "The AI on the phone recorded this outcome. Report it to the user in their language."
+                        : "Call ended without a structured outcome — summarize the transcript for the user.",
+                    });
+                  }
+
+                  // Legacy non-embedded path: keep the old "wait for first user
+                  // reply" behavior so providers that need OpenClaw-side turn
+                  // control (Twilio, mock) still work.
                   let ready = false;
                   while (Date.now() - startedAt < maxWaitMs) {
                     const call = rt.manager.getCall(callId);
@@ -494,7 +576,6 @@ You CAN hear what the person says and have a real back-and-forth conversation. A
                     await new Promise((r) => setTimeout(r, 500));
                   }
                   if (ready) {
-                    // Wait for user's first response (blocks until user speaks)
                     const continueResult = await rt.manager.continueCall(callId, "");
                     if (continueResult.success && continueResult.transcript) {
                       return json({

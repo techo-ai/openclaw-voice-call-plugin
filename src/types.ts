@@ -293,6 +293,27 @@ export type OutboundCallOptions = {
 };
 
 // -----------------------------------------------------------------------------
+// Recorded call outcomes (provider-side, from embedded live agent)
+// -----------------------------------------------------------------------------
+
+export const RecordedCallOutcomeStatusSchema = z.enum([
+  "done",
+  "partial",
+  "no_result",
+  "voicemail",
+  "unclear",
+]);
+export type RecordedCallOutcomeStatus = z.infer<typeof RecordedCallOutcomeStatusSchema>;
+
+export const RecordedCallOutcomeSchema = z.object({
+  status: RecordedCallOutcomeStatusSchema,
+  summary: z.string(),
+  details: z.string().optional(),
+  recordedAt: z.number(),
+});
+export type RecordedCallOutcome = z.infer<typeof RecordedCallOutcomeSchema>;
+
+// -----------------------------------------------------------------------------
 // Tool Result Types
 // -----------------------------------------------------------------------------
 

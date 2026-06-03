@@ -24,20 +24,6 @@ openclaw plugins install @openclaw/voice-call
 
 Restart the Gateway afterwards.
 
-### Option C: bundled OpenClaw fork (techo-ai)
-
-This repo is the **canonical source** for our Asterisk + Realtime fork. With an OpenClaw clone at `../openclaw` (sibling directory), run:
-
-```bash
-./scripts/sync-into-openclaw.sh
-```
-
-That mirrors sources into `../openclaw/extensions/voice-call/` for Docker or monorepo builds.
-
-### Server: update plugin without rebuilding the OpenClaw image
-
-Mount the plugin directory into the container and register it with **`plugins.load.paths`** (see OpenClaw docs for `plugins.load.paths`). A plain copy under `~/.openclaw/extensions/` may **not** override the bundled `voice-call` inside the image; `load.paths` uses origin `config` and wins. After setup: rsync this repo to the host path, then `docker compose restart <openclaw-service>` — no full image rebuild for plugin-only changes. Operational checklist: `AGENTS.md` in the techo-ai repo (section *Fast deploy: voice-call…*).
-
 ### Option B: copy into your global extensions folder (dev)
 
 ```bash
@@ -45,6 +31,30 @@ mkdir -p ~/.openclaw/extensions
 cp -R . ~/.openclaw/extensions/voice-call
 cd ~/.openclaw/extensions/voice-call && pnpm install
 ```
+
+### Option C: load from a directory via `plugins.load.paths` (server)
+
+This is the **canonical production path**: the plugin lives on disk outside the OpenClaw image and is loaded at runtime through OpenClaw's `plugins.load.paths`. The OpenClaw image itself stays vanilla — upgrading OpenClaw never requires changes here.
+
+1. Drop this repo onto the host (rsync, git clone, npm pack, etc.) at any directory readable by the gateway. Example: `/opt/openclaw-stack/voice-call-plugin/`.
+2. Mount it into the OpenClaw container at a known path (Compose example):
+   ```yaml
+   volumes:
+     - /opt/openclaw-stack/voice-call-plugin:/opt/openclaw-plugins/voice-call:ro
+   ```
+3. Tell OpenClaw to load it in `openclaw.json`:
+   ```json5
+   plugins: {
+     load: { paths: ["/opt/openclaw-plugins/voice-call"] },
+     entries: { "voice-call": { enabled: true, config: { /* … */ } } }
+   }
+   ```
+4. Restart the gateway. Use the helper script for repeat deploys:
+   ```bash
+   ./scripts/deploy-to-server.sh <ssh-target> /opt/openclaw-stack/voice-call-plugin
+   ```
+
+Do NOT overlay this plugin onto an OpenClaw monorepo's `extensions/voice-call/`. That couples plugin releases to OpenClaw releases and re-creates the merge-conflict problem this layout exists to avoid.
 
 ## Config
 

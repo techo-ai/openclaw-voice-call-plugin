@@ -1,4 +1,5 @@
 import type {
+  CallId,
   GetCallStatusInput,
   GetCallStatusResult,
   HangupCallInput,
@@ -6,6 +7,7 @@ import type {
   InitiateCallResult,
   PlayTtsInput,
   ProviderName,
+  RecordedCallOutcome,
   WebhookParseOptions,
   ProviderWebhookParseResult,
   StartListeningInput,
@@ -83,4 +85,12 @@ export interface VoiceCallProvider {
    * so the caller can keep the call and rely on timer-based fallback.
    */
   getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
+
+  /**
+   * Optional: return the most recent outcome the embedded live agent recorded
+   * for this internal call ID via the outcome_summary tool. Returns null when
+   * no outcome was captured (call never ran an embedded agent, or the model
+   * never invoked outcome_summary).
+   */
+  getRecordedOutcome?(callId: CallId): RecordedCallOutcome | null;
 }

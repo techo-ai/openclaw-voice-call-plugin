@@ -5,6 +5,7 @@ import type { AsteriskConfig } from "../config.js";
 import { resamplePcmTo8k } from "../telephony-audio.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
+  CallId,
   GetCallStatusInput,
   GetCallStatusResult,
   HangupCallInput,
@@ -13,6 +14,7 @@ import type {
   NormalizedEvent,
   PlayTtsInput,
   ProviderWebhookParseResult,
+  RecordedCallOutcome,
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
@@ -212,6 +214,23 @@ export class AsteriskProvider implements VoiceCallProvider {
 
   /** Active realtime voice sessions per channel */
   private readonly voiceSessions = new Map<string, RealtimeVoiceEntry>();
+  /**
+   * Channels for which a `StasisStart` event has been observed — i.e. the
+   * channel is actually inside our Stasis app and is safe to drive via ARI.
+   * For outbound originate, `ChannelStateChange` Up can fire BEFORE
+   * `StasisStart` arrives over the WebSocket; if we call ARI ops (bridge add,
+   * ExternalMedia create) in that window they hang because the channel is not
+   * yet in the app and finally fail with 400 "Channel not found" once it
+   * goes away. Tracking entry into Stasis lets us defer the answered flow
+   * until both signals have arrived.
+   */
+  private readonly stasisStartedChannels = new Set<string>();
+  /**
+   * Last outcome the Realtime model recorded for a given internal callId via
+   * the outcome_summary tool. Survives cleanupRealtimeVoice so the voice_call
+   * tool can still read it after the call ends. LRU-trimmed at 256 entries.
+   */
+  private readonly recordedOutcomes = new Map<string, RecordedCallOutcome>();
   /** Realtime voice config (set from runtime) */
   private realtimeConfig: RealtimeVoiceConfig | null = null;
   /**
@@ -312,6 +331,16 @@ export class AsteriskProvider implements VoiceCallProvider {
     return this.isEndToEnd(providerCallId);
   }
 
+  /**
+   * VoiceCallProvider hook — return the last outcome_summary the Realtime
+   * model recorded for this internal callId, or null when none captured.
+   * Stays available after the call ends so the voice_call tool can include
+   * the structured result in its response back to the OpenClaw agent.
+   */
+  getRecordedOutcome(callId: CallId): RecordedCallOutcome | null {
+    return this.recordedOutcomes.get(callId) ?? null;
+  }
+
   // -------------------------------------------------------------------------
   // Event delivery
   // -------------------------------------------------------------------------
@@ -328,6 +357,41 @@ export class AsteriskProvider implements VoiceCallProvider {
     if (this.eventCallback) {
       this.eventCallback(event);
     }
+  }
+
+  /**
+   * Outbound answered flow: kick off the realtime voice session (or just
+   * mark the call answered if realtime isn't configured) and deliver
+   * `call.answered` so the manager can speak the initial message. Called
+   * exactly once per channel — gated by `voiceSessions.has(channelId)`.
+   * Triggered from whichever of `StasisStart` / `ChannelStateChange Up`
+   * arrives second, so the channel is guaranteed to be both inside our
+   * Stasis app and in the Up state before any ARI ops fire.
+   */
+  private triggerOutboundAnswered(channelId: string, callId: CallId): void {
+    if (this.voiceSessions.has(channelId)) {
+      return;
+    }
+    const sendAnswered = () => {
+      this.deliverEvent({
+        id: crypto.randomUUID(),
+        callId,
+        providerCallId: channelId,
+        timestamp: Date.now(),
+        type: "call.answered",
+      });
+    };
+    if (!this.realtimeConfig) {
+      sendAnswered();
+      return;
+    }
+    console.log(`[asterisk] Call answered, starting realtime voice for ${channelId}`);
+    this.startRealtimeVoice(channelId)
+      .then(sendAnswered)
+      .catch((err) => {
+        console.error("[asterisk] Failed to start realtime voice:", (err as Error).message);
+        sendAnswered();
+      });
   }
 
   // -------------------------------------------------------------------------
@@ -491,9 +555,19 @@ export class AsteriskProvider implements VoiceCallProvider {
         // Ignore ExternalMedia (UnicastRTP) channels — handled internally
         if (channel.name?.startsWith("UnicastRTP") || channel.name?.startsWith("Local/")) return;
 
+        this.stasisStartedChannels.add(channelId);
+
         if (callId) {
-          // Outbound call entered Stasis — wait for answer (ChannelStateChange "Up")
-          console.log(`[asterisk] Outbound StasisStart for ${channelId}, waiting for answer`);
+          console.log(
+            `[asterisk] Outbound StasisStart for ${channelId} state=${channel.state ?? "?"}`,
+          );
+          // Race-safe trigger: ChannelStateChange Up may have arrived first.
+          // If the channel is already Up when Stasis entry catches up, we
+          // start the realtime voice flow here instead of having waited
+          // forever in the Up handler.
+          if (channel.state === "Up") {
+            this.triggerOutboundAnswered(channelId, callId);
+          }
           return;
         }
 
@@ -555,40 +629,20 @@ export class AsteriskProvider implements VoiceCallProvider {
             state,
             channelName: channel.name,
           });
-          // Start realtime voice FIRST so it's ready when manager calls playTts
-          if (!this.voiceSessions.has(channelId) && this.realtimeConfig) {
-            console.log(`[asterisk] Call answered, starting realtime voice for ${channelId}`);
-            this.startRealtimeVoice(channelId)
-              .then(() => {
-                // Only deliver call.answered AFTER realtime is ready
-                this.deliverEvent({
-                  id: crypto.randomUUID(),
-                  callId: callId!,
-                  providerCallId: channelId,
-                  timestamp: Date.now(),
-                  type: "call.answered",
-                });
-              })
-              .catch((err) => {
-                console.error("[asterisk] Failed to start realtime voice:", (err as Error).message);
-                // Still deliver answered even if realtime fails
-                this.deliverEvent({
-                  id: crypto.randomUUID(),
-                  callId: callId!,
-                  providerCallId: channelId,
-                  timestamp: Date.now(),
-                  type: "call.answered",
-                });
-              });
-          } else {
-            this.deliverEvent({
-              id: crypto.randomUUID(),
-              callId,
-              providerCallId: channelId,
-              timestamp: Date.now(),
-              type: "call.answered",
-            });
+          // Race guard: ChannelStateChange Up can arrive BEFORE StasisStart
+          // on outbound Originate. Calling ARI ops here (bridge add,
+          // ExternalMedia create) against a channel that hasn't entered our
+          // Stasis app silently hangs and eventually returns 400 "Channel
+          // not found" once the channel goes away — leaving the callee on a
+          // silent line. The StasisStart handler will run triggerOutboundAnswered
+          // once Stasis entry actually fires.
+          if (!this.stasisStartedChannels.has(channelId)) {
+            console.log(
+              `[asterisk] Channel ${channelId} state Up, awaiting Stasis entry before realtime start`,
+            );
+            break;
           }
+          this.triggerOutboundAnswered(channelId, callId);
         }
         break;
       }
@@ -629,6 +683,7 @@ export class AsteriskProvider implements VoiceCallProvider {
           `[asterisk] ${event.type}: channel=${channelId} name=${channel.name ?? "?"} raw_sip_cause=${JSON.stringify(event.cause)} → endReason=${sipCauseToEndReason(event.cause)}`,
         );
         this.cleanupRealtimeVoice(channelId);
+        this.stasisStartedChannels.delete(channelId);
         this.deliverEvent({
           id: crypto.randomUUID(),
           callId,
@@ -1089,6 +1144,21 @@ export class AsteriskProvider implements VoiceCallProvider {
             transcript: text,
           });
         }
+      };
+
+      session.onOutcomeRecorded = (outcome) => {
+        const cid = this.channelToCallId.get(channelId);
+        if (!cid) return;
+        // LRU eviction: drop oldest entry once we cross the soft cap so the
+        // map can't grow unboundedly across many calls.
+        if (this.recordedOutcomes.size >= 256) {
+          const firstKey = this.recordedOutcomes.keys().next().value;
+          if (firstKey) this.recordedOutcomes.delete(firstKey);
+        }
+        this.recordedOutcomes.set(cid, outcome);
+        console.log(
+          `[asterisk] outcome captured for call=${cid} status=${outcome.status} summary="${outcome.summary.slice(0, 120)}"`,
+        );
       };
 
       // Deliver user speech transcripts into OpenClaw's call manager.

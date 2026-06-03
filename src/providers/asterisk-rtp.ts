@@ -124,34 +124,88 @@ export function createRtpSender(target: RtpSource): RtpSender {
   let timestamp = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
   let queue: Buffer[] = [];
-  let intervalId: ReturnType<typeof setInterval> | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let nextTickAt = 0;
   let closed = false;
+  let lastQueueDrainAt = 0;
 
-  function processQueue(): void {
-    if (intervalId) return;
-    intervalId = setInterval(() => {
-      if (queue.length === 0 || closed) {
-        if (intervalId) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-        return;
+  // Tolerance for "catch-up": if real time has run away from nextTickAt by more
+  // than this, flush any backlog and rebase the schedule. Without this, drift
+  // accumulates and the 8 kHz µ-law receiver hears the audio "tear".
+  const CATCHUP_MS = 40;
+
+  // Warm-up silence prefilled at the start of every fresh utterance (after a
+  // quiet gap). Without this, Asterisk's PSTN-side jitter buffer is still cold
+  // when the first real audio packet arrives — caller hears the first 80-120ms
+  // clipped ("ate the beginning of the word"). 100ms of µ-law silence wakes
+  // the buffer at zero perceptual cost.
+  const TURN_PREFILL_FRAMES = 5;
+  const TURN_IDLE_THRESHOLD_MS = 250;
+  const PREFILL_SILENCE_FRAME = Buffer.alloc(SAMPLES_PER_PACKET, SILENCE_BYTE);
+
+  function sendOne(): void {
+    if (queue.length === 0 || closed) return;
+    const payload = queue.shift()!;
+    const header = buildRtpHeader(seq, timestamp, ssrc);
+    seq = (seq + 1) & 0xffff;
+    timestamp += SAMPLES_PER_PACKET;
+    const packet = Buffer.concat([header, payload]);
+    socket.send(packet, target.port, target.address, (err) => {
+      if (err && !closed) {
+        console.error("[asterisk-rtp] Send error:", err.message);
       }
-      const payload = queue.shift()!;
-      const header = buildRtpHeader(seq, timestamp, ssrc);
-      seq = (seq + 1) & 0xffff;
-      timestamp += SAMPLES_PER_PACKET;
-      const packet = Buffer.concat([header, payload]);
-      socket.send(packet, target.port, target.address, (err) => {
-        if (err && !closed) {
-          console.error("[asterisk-rtp] Send error:", err.message);
-        }
-      });
-    }, PTIME_MS);
+    });
+  }
+
+  function scheduleNextTick(): void {
+    if (timeoutId || closed || queue.length === 0) return;
+    const now = Date.now();
+    if (!nextTickAt || now - nextTickAt > CATCHUP_MS) {
+      // First tick, or we drifted too far behind — rebase schedule to "now".
+      nextTickAt = now;
+    }
+    const delay = Math.max(0, nextTickAt - now);
+    timeoutId = setTimeout(tick, delay);
+  }
+
+  function tick(): void {
+    timeoutId = null;
+    if (closed || queue.length === 0) return;
+
+    // Catch-up: if the event loop stalled and real time is well past where the
+    // schedule says we should be, flush enough frames to align with wall clock
+    // before resuming the steady cadence. This is what fixes the "torn / bad
+    // microphone" perception that comes from setInterval drift.
+    let frames = 1;
+    const now = Date.now();
+    if (now - nextTickAt > CATCHUP_MS) {
+      frames = 1 + Math.floor((now - nextTickAt) / PTIME_MS);
+    }
+    for (let i = 0; i < frames && queue.length > 0; i++) {
+      sendOne();
+    }
+    if (queue.length === 0) {
+      lastQueueDrainAt = Date.now();
+    }
+
+    nextTickAt += PTIME_MS * frames;
+    scheduleNextTick();
   }
 
   return {
     send(mulawData: Buffer): void {
+      // Detect start of a fresh utterance after a quiet gap and prefill µ-law
+      // silence. This warms up Asterisk's RTP jitter buffer so the first
+      // syllable of the bot's reply isn't clipped on the callee's end.
+      const now = Date.now();
+      const isTurnStart =
+        queue.length === 0 &&
+        (lastQueueDrainAt === 0 || now - lastQueueDrainAt > TURN_IDLE_THRESHOLD_MS);
+      if (isTurnStart) {
+        for (let i = 0; i < TURN_PREFILL_FRAMES; i++) {
+          queue.push(PREFILL_SILENCE_FRAME);
+        }
+      }
       // Split into 160-byte packets
       for (let offset = 0; offset < mulawData.length; offset += SAMPLES_PER_PACKET) {
         let chunk = mulawData.subarray(offset, offset + SAMPLES_PER_PACKET);
@@ -162,21 +216,24 @@ export function createRtpSender(target: RtpSource): RtpSender {
         }
         queue.push(chunk);
       }
-      processQueue();
+      scheduleNextTick();
     },
     stopPlayback(): void {
       queue = [];
-      if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
       }
+      // Reset schedule so the next playback starts cleanly.
+      nextTickAt = 0;
+      lastQueueDrainAt = Date.now();
     },
     close(): void {
       closed = true;
       queue = [];
-      if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
       }
       try {
         socket.close();

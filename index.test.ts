@@ -57,8 +57,8 @@ function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
   void plugin.register({
-    id: "voice-call",
-    name: "Voice Call",
+    id: "voice-call-asterisk",
+    name: "Voice Call (Asterisk + Realtime)",
     description: "test",
     version: "0",
     source: "test",
@@ -82,8 +82,8 @@ async function registerVoiceCallCli(program: Command) {
     register: RegisterVoiceCall;
   };
   await register({
-    id: "voice-call",
-    name: "Voice Call",
+    id: "voice-call-asterisk",
+    name: "Voice Call (Asterisk + Realtime)",
     description: "test",
     version: "0",
     source: "test",

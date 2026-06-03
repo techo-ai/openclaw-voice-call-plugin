@@ -1,6 +1,6 @@
 {
-  "name": "@openclaw/voice-call",
-  "version": "2026.3.27",
+  "name": "@techo-ai/voice-call-asterisk",
+  "version": "2026.5.12",
   "description": "OpenClaw voice-call plugin",
   "type": "module",
   "repository": {
@@ -23,17 +23,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sinclair/typebox": "0.34.48",
     "commander": "^14.0.3",
+    "typebox": "^1.1.0",
     "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",
-    "openclaw": ">=2026.3.27",
+    "openclaw": ">=2026.5.12",
     "vitest": "^4.1.2"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.27"
+    "openclaw": ">=2026.5.12"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -45,10 +45,17 @@
       "./index.ts"
     ],
     "install": {
-      "npmSpec": "@openclaw/voice-call",
+      "npmSpec": "@techo-ai/voice-call-asterisk",
       "localPath": ".",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.27"
+      "minHostVersion": ">=2026.5.12"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.12"
+    },
+    "build": {
+      "openclawVersion": "2026.5.12",
+      "pluginSdkVersion": "2026.5.12"
     },
     "release": {
       "publishToNpm": true

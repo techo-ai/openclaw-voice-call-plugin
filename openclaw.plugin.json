@@ -1,7 +1,11 @@
 {
-  "id": "voice-call",
-  "name": "Voice Call",
-  "description": "Voice-call plugin with Telnyx, Twilio, Plivo, Asterisk, and mock providers",
+  "id": "voice-call-asterisk",
+  "name": "Voice Call (Asterisk + Realtime)",
+  "description": "Voice-call plugin with Telnyx, Twilio, Plivo, Asterisk (multi-cluster ARI + OpenAI Realtime end-to-end agent), and mock providers. Distinct plugin id from the bundled openclaw 'voice-call' so it can live alongside without schema clashes.",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
   "contracts": {
     "tools": ["voice_call"]
   },
